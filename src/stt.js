@@ -2,10 +2,12 @@
 // no audio API — we transcribe with whatever audio-capable key is available, and
 // fall back across providers. Returns { text, provider } or { text:'', error }.
 const { pcmToWav } = require('./wav');
+const { withRetry } = require('./retry');
 
 async function transcribeOpenAI(apiKey, wav, model) {
   const OpenAI = require('openai');
-  const toFile = OpenAI.toFile || require('openai/uploads').toFile;
+  const toFile = OpenAI.toFile || (OpenAI.uploads && OpenAI.uploads.toFile) || null;
+  if (!toFile) throw new Error('OpenAI SDK missing toFile helper');
   const client = new OpenAI({ apiKey });
   const file = await toFile(wav, 'audio.wav', { type: 'audio/wav' });
   const res = await client.audio.transcriptions.create({ file, model: model || 'whisper-1' });
@@ -17,10 +19,13 @@ async function transcribeGemini(apiKey, wav) {
   const ai = new GoogleGenAI({ apiKey });
   const res = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
-    contents: [{ role: 'user', parts: [
-      { text: 'Transcribe this audio verbatim. Return only the spoken words with no commentary. If there is no clear speech, return an empty response.' },
-      { inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } }
-    ] }]
+    contents: [{
+      role: 'user',
+      parts: [
+        { text: 'Transcribe this audio verbatim. Return only the spoken words with no commentary. If there is no clear speech, return an empty response.' },
+        { inlineData: { mimeType: 'audio/wav', data: wav.toString('base64') } }
+      ]
+    }]
   });
   return ((res && res.text) || '').trim();
 }
@@ -40,10 +45,15 @@ function createSTT(settings) {
       let lastErr = null;
       for (const c of chain) {
         try {
-          const text = await c.fn(wav);
+          const text = await withRetry(() => c.fn(wav));
           return { text, provider: c.p };
         } catch (e) {
-          lastErr = { status: e && e.status, code: e && e.code, message: (e && e.message) || String(e), provider: c.p };
+          lastErr = {
+            status: e && e.status,
+            code: e && e.code,
+            message: (e && e.message) || String(e),
+            provider: c.p
+          };
         }
       }
       return { text: '', error: lastErr };

@@ -1,9 +1,11 @@
 // Pure settings helpers (no Electron) so unit tests can run in plain Node.
 
 const SCHEMA_VERSION = 2;
+const PRIVACY_NOTICE_VERSION = 2;
 
 const DEFAULTS = {
   schemaVersion: SCHEMA_VERSION,
+  privacyNoticeVersion: 0,
   provider: 'openai',
   smart: false,
   resumeContext: '',
@@ -51,6 +53,13 @@ function migrateSettings(raw) {
   return data;
 }
 
+function needsPrivacyAck(settings) {
+  if (!settings) return true;
+  if (!settings.privacyAck) return true;
+  const seen = Number(settings.privacyNoticeVersion) || 0;
+  return seen < PRIVACY_NOTICE_VERSION;
+}
+
 function normalizeSettings(raw) {
   const data = migrateSettings(raw);
   data.opacity = clampOpacity(data.opacity);
@@ -58,6 +67,7 @@ function normalizeSettings(raw) {
   data.onboarded = !!data.onboarded;
   data.privacyAck = !!data.privacyAck;
   data.listenConsent = !!data.listenConsent;
+  data.privacyNoticeVersion = Number(data.privacyNoticeVersion) || 0;
   if (!data.apiKeys[data.provider]) {
     const validProviders = ['openai', 'anthropic', 'gemini', 'nvidia'];
     const active = validProviders.find((p) => data.apiKeys[p]);
@@ -73,10 +83,12 @@ function hasProviderKey(settings) {
 
 module.exports = {
   SCHEMA_VERSION,
+  PRIVACY_NOTICE_VERSION,
   DEFAULTS,
   deepMerge,
   clampOpacity,
   migrateSettings,
   normalizeSettings,
-  hasProviderKey
+  hasProviderKey,
+  needsPrivacyAck
 };

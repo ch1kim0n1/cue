@@ -157,6 +157,7 @@ Still open for contribution:
 - [Development](docs/development.md)
 - [Threat model](docs/threat-model.md)
 - [Rollback](docs/rollback.md)
+- [Release QA](docs/release-qa.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
 
 ---
@@ -190,12 +191,15 @@ Issues and PRs welcome. Keep the surface small: `main.js`, `renderer/`, `src/`. 
 
 ### Platform support
 
-- [x] Windows
-- [x] macOS
-- [ ] Linux (untested)
+- [x] Windows **x64** (official)
+- [x] macOS **arm64 + x64** (official)
+- [ ] Windows ARM (out of scope for official builds)
+- [ ] Linux (community-supported only; not officially distributed or sold)
+
+i18n is deferred; product copy is English-only for now.
 
 ## License
 
-[GPL-3.0-or-later](LICENSE).
+[GPL-3.0-or-later](LICENSE). See also [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the [release QA runbook](docs/release-qa.md).
 
 Built as an open study of meeting copilots. Related open projects: `pickle-com/glass`, `sohzm/cheating-daddy`.

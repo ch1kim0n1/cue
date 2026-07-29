@@ -720,6 +720,34 @@ body.compact .act { font-size: 12.5px; padding: 4px 6px; }
 .shortcut-hint.error { color: #ff9d8f; }
 .shortcut-hint.success { color: #78dba0; }
 .s-status { color: var(--tx-mut); font-size: 12px; margin-top: 10px; min-height: 16px; }
+.s-provider-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.linkish {
+  border: 0;
+  background: transparent;
+  color: #f3c48a;
+  font: 500 11.5px var(--font);
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+.linkish:hover { color: #fff; }
+.is-hidden { display: none !important; }
+.vis-hidden { visibility: hidden; }
+#input {
+  height: var(--input-height, 22px);
+}
+#live-dot.is-collapsed-away { display: none; }
+.platform-note {
+  margin-top: 10px;
+  color: var(--tx-mut);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
 .s-check {
   display: flex;
   align-items: flex-start;

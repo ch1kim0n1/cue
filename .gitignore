@@ -4,4 +4,6 @@ out/
 native/systemaudio
 *.log
 .DS_Store
-cue-data.json
+bom.cdx.json
+playwright-report/
+test-results/

@@ -218,8 +218,10 @@
 
   function syncPlaceholder() {
     placeholder.classList.toggle('hidden', input.value.length > 0 || document.activeElement === input);
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+    // Textarea auto-grow still needs a measured height; kept as a CSS custom property write.
+    document.documentElement.style.setProperty('--input-height', 'auto');
+    const next = Math.min(Math.max(input.scrollHeight, 22), 140);
+    document.documentElement.style.setProperty('--input-height', next + 'px');
   }
 
   input.addEventListener('input', syncPlaceholder);
@@ -288,7 +290,7 @@
       animateIn(panel, { y: -6, duration: 0.28 });
     }
     $('#hide-btn').classList.toggle('collapsed', collapsed);
-    $('#live-dot').style.display = collapsed ? 'none' : '';
+    $('#live-dot').classList.toggle('is-collapsed-away', collapsed);
   });
 
   $('#stop-btn').addEventListener('click', async () => {
@@ -516,15 +518,21 @@
   });
 
   const scrim = $('#settings-scrim');
+  let releaseSettingsFocus = null;
+  let releaseOnboardFocus = null;
+  let releasePrivacyFocus = null;
+
   function openSettings() {
     fillSettings();
     scrim.classList.remove('hidden');
     animateIn($('#settings'), { y: 12, scale: 0.97, duration: 0.32 });
+    if (window.CUE_FOCUS) releaseSettingsFocus = window.CUE_FOCUS.trapFocus($('#settings'), { initialFocus: '#s-close' });
   }
   function closeSettings() {
     cancelShortcutRecording();
     saveSettings();
     scrim.classList.add('hidden');
+    if (releaseSettingsFocus) { releaseSettingsFocus(); releaseSettingsFocus = null; }
   }
   $('#more-btn').addEventListener('click', openSettings);
   $('#s-close').addEventListener('click', closeSettings);
@@ -852,11 +860,11 @@
       if (i === obIndex) d.className = 'on';
       dots.appendChild(d);
     });
-    $('#ob-back').style.visibility = obIndex === 0 ? 'hidden' : 'visible';
+    $('#ob-back').classList.toggle('vis-hidden', obIndex === 0);
     const last = obIndex === OB_STEPS.length - 1;
     $('#ob-next').textContent = last ? (hasAnyKey(settings) ? 'Done' : 'Add a key first') : 'Next';
     $('#ob-next').disabled = last && !hasAnyKey(settings);
-    $('#ob-skip').style.visibility = last ? 'hidden' : 'visible';
+    $('#ob-skip').classList.toggle('vis-hidden', last);
     animateIn($('#onboard'), { y: 10, scale: 0.98, duration: 0.3 });
   }
 
@@ -865,6 +873,7 @@
     renderOnboard();
     obScrim.classList.remove('hidden');
     setIgnore(false);
+    if (window.CUE_FOCUS) releaseOnboardFocus = window.CUE_FOCUS.trapFocus($('#onboard'), { initialFocus: '#ob-next' });
   }
 
   async function finishOnboard() {
@@ -878,19 +887,22 @@
     await cue.settingsSet({ onboarded: true });
     settings = await cue.settingsGet();
     obScrim.classList.add('hidden');
+    if (releaseOnboardFocus) { releaseOnboardFocus(); releaseOnboardFocus = null; }
   }
 
   function showPrivacy() {
     privacyScrim.classList.remove('hidden');
     setIgnore(false);
     animateIn($('#privacy'), { y: 10, scale: 0.98, duration: 0.3 });
+    if (window.CUE_FOCUS) releasePrivacyFocus = window.CUE_FOCUS.trapFocus($('#privacy'), { initialFocus: '#privacy-ack' });
   }
 
   $('#privacy-ack').addEventListener('click', async () => {
     settings.privacyAck = true;
-    await cue.settingsSet({ privacyAck: true });
+    await cue.settingsSet({ privacyAck: true, privacyNoticeVersion: 2 });
     settings = await cue.settingsGet();
     privacyScrim.classList.add('hidden');
+    if (releasePrivacyFocus) { releasePrivacyFocus(); releasePrivacyFocus = null; }
     if (!settings.onboarded) showOnboard();
   });
 
@@ -902,20 +914,17 @@
     if (obIndex > 0) { obIndex--; renderOnboard(); }
   });
   $('#ob-skip').addEventListener('click', async () => {
-    // Skip still requires privacy ack already done; mark onboarded only if a key exists.
-    settings = await cue.settingsGet();
-    if (!hasAnyKey(settings)) {
-      showStatus('Skipped guide, but Assist needs an API key in Settings.');
-      settings.onboarded = true;
-      await cue.settingsSet({ onboarded: true });
-      settings = await cue.settingsGet();
-      obScrim.classList.add('hidden');
-      openSettings();
-      return;
-    }
-    finishOnboard();
+    // Skip never marks onboarded. Hide the guide and open Settings so the user can add a key.
+    obScrim.classList.add('hidden');
+    if (releaseOnboardFocus) { releaseOnboardFocus(); releaseOnboardFocus = null; }
+    showStatus('Setup is not finished. Add an API key in Settings, then reopen the guide from the Cue logo.');
+    openSettings();
   });
   $('#logo-btn').addEventListener('click', showOnboard);
+
+  document.querySelectorAll('.linkish[data-docs]').forEach((btn) => {
+    btn.addEventListener('click', () => cue.openPane(btn.getAttribute('data-docs')));
+  });
 
   (async function boot() {
     settings = await cue.settingsGet();
@@ -935,7 +944,8 @@
     pulseLive(!!st.active);
     animateIn($('#toolbar'), { y: -8, duration: 0.4 });
     animateIn($('#panel'), { y: 10, duration: 0.42 });
-    if (!settings.privacyAck) showPrivacy();
+    const privacyStale = !settings.privacyAck || Number(settings.privacyNoticeVersion || 0) < 2;
+    if (privacyStale) showPrivacy();
     else if (!settings.onboarded) showOnboard();
   })();
 })();

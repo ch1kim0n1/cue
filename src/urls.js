@@ -12,6 +12,7 @@ const ALLOWED_HOST_SUFFIXES = [
   'anthropic.com',
   'google.com',
   'aistudio.google.com',
+  'ai.google.dev',
   'nvidia.com',
   'github.com'
 ];

@@ -49,4 +49,5 @@ test('packaging enables asar and multi-arch mac targets', () => {
   assert.match(cfg, /arm64/);
   assert.match(cfg, /x64/);
   assert.match(cfg, /provider:\s*"github"/);
+  assert.doesNotMatch(cfg, /certificateFile:\s*hasWinCert\s*\?\s*undefined\s*:\s*undefined/);
 });

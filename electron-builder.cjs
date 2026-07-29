@@ -1,8 +1,10 @@
 /* electron-builder configuration.
  *
  * macOS signing: MAC_SIGN=1 + Developer ID / CSC_LINK + Apple notarization env
- * Windows signing: WIN_CSC_LINK (or CSC_LINK) + WIN_CSC_KEY_PASSWORD
- * Auto-updates publish to GitHub Releases (owner/repo inferred from package/git).
+ * Windows signing: set CSC_LINK (or WIN_CSC_LINK copied into CSC_LINK in CI) +
+ *   CSC_KEY_PASSWORD. electron-builder reads those env vars directly — do not
+ *   set certificateFile unless you have a local .pfx path.
+ * Auto-updates publish to GitHub Releases.
  */
 
 const hasMacCert = process.env.MAC_SIGN === "1";
@@ -12,8 +14,7 @@ const canNotarize =
   !!process.env.APPLE_APP_SPECIFIC_PASSWORD &&
   !!process.env.APPLE_TEAM_ID;
 
-const winCert = process.env.WIN_CSC_LINK || process.env.CSC_LINK || "";
-const hasWinCert = !!winCert;
+const hasWinCert = !!(process.env.WIN_CSC_LINK || process.env.CSC_LINK);
 
 /** @type {import('electron-builder').Configuration} */
 module.exports = {
@@ -57,13 +58,13 @@ module.exports = {
     },
   },
   win: {
+    // x64 only — Windows ARM is out of scope for official builds.
     target: [
       { target: "nsis", arch: ["x64"] },
       { target: "portable", arch: ["x64"] },
     ],
     artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
-    // electron-builder picks CSC_LINK; prefer WIN_CSC_LINK when set in CI.
-    certificateFile: hasWinCert ? undefined : undefined,
+    // Signing uses CSC_LINK / CSC_KEY_PASSWORD from the environment.
     signingHashAlgorithms: hasWinCert ? ["sha256"] : undefined,
   },
   nsis: {

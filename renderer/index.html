@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';" />
+  <!-- style-src keeps 'unsafe-inline' because GSAP writes transform/opacity inline. App-owned styles use classes/CSS vars. -->
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Cue</title>
   <link rel="stylesheet" href="fonts.css" />
@@ -84,7 +85,7 @@
       </div>
       <div class="s-body">
         <label class="s-check"><input id="listen-consent" type="checkbox" /> I have consent to capture meeting audio where required by law</label>
-        <div class="s-hint-block">Listening sends mic and meeting audio to your chosen AI provider. Session transcripts are memory-only and vanish when Cue quits.</div>
+        <div class="s-hint-block">Some states and countries require all parties to consent to recording (for example California, Florida, and many EU member states). Verify your jurisdiction before listening. Audio is sent to your chosen AI provider.</div>
 
         <label class="s-label">Provider</label>
         <div class="s-seg" id="provider-seg">
@@ -92,6 +93,11 @@
           <button type="button" data-provider="anthropic">Anthropic</button>
           <button type="button" data-provider="gemini">Gemini</button>
           <button type="button" data-provider="nvidia">Nvidia</button>
+        </div>
+        <div class="s-provider-links">
+          <button type="button" class="linkish" data-docs="https://platform.openai.com/docs/guides/your-data">OpenAI data use</button>
+          <button type="button" class="linkish" data-docs="https://privacy.anthropic.com/en/collections/9956214-privacy-center">Anthropic privacy</button>
+          <button type="button" class="linkish" data-docs="https://ai.google.dev/gemini-api/terms">Gemini API terms</button>
         </div>
 
         <label class="s-label">API keys <span class="s-hint">cue-data.json</span></label>
@@ -132,6 +138,7 @@
 
         <label class="s-label">Diagnostics</label>
         <pre class="s-diag" id="diagnostics-box">Open Settings to refresh.</pre>
+        <div class="platform-note">Official builds: Windows x64, macOS Intel + Apple Silicon. Linux is community-supported only. English UI only (i18n deferred).</div>
 
         <div class="s-status" id="s-status"></div>
       </div>
@@ -171,6 +178,7 @@
 
   <script src="vendor/gsap.min.js"></script>
   <script src="icons.js"></script>
+  <script src="focus-trap.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

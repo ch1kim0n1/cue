@@ -1,6 +1,6 @@
 {
   "name": "cue",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Cue is a private AI overlay for meetings and code. Screen, mic, and meeting audio into your own LLM. Works on Windows and macOS.",
   "license": "GPL-3.0-or-later",
   "author": "Cue",
@@ -10,13 +10,16 @@
   },
   "scripts": {
     "start": "electron .",
-    "test": "node --test",
+    "test": "node --test test/**/*.test.js test/smoke-main.js",
     "test:smoke": "node test/smoke-main.js",
+    "test:e2e": "playwright test",
+    "lint": "eslint main.js preload.js src renderer scripts test e2e --max-warnings 50",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --mac zip",
     "dist:win": "electron-builder --win nsis",
     "dist:win:dir": "electron-builder --win --dir",
-    "verify:vendor": "node scripts/verify-vendor.js"
+    "verify:vendor": "node scripts/verify-vendor.js",
+    "sbom": "cyclonedx-npm --output-file bom.cdx.json --output-reproducible --omit dev"
   },
   "keywords": [
     "electron",
@@ -28,15 +31,20 @@
     "meeting-copilot"
   ],
   "devDependencies": {
+    "@cyclonedx/cyclonedx-npm": "1.19.3",
+    "@playwright/test": "1.49.1",
     "electron": "33.2.1",
-    "electron-builder": "24.13.3"
+    "electron-builder": "24.13.3",
+    "eslint": "8.57.1",
+    "eslint-plugin-security": "3.0.1",
+    "playwright": "1.49.1"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.32.1",
     "@fontsource/ibm-plex-mono": "5.2.5",
     "@fontsource/outfit": "5.2.5",
     "@google/genai": "0.3.1",
-    "electron-updater": "6.3.9",
+    "electron-updater": "6.8.9",
     "gsap": "3.13.0",
     "lucide-static": "0.468.0",
     "openai": "4.73.0"

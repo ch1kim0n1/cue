@@ -18,7 +18,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        # Supported matrix: Node 18/20/22 with Electron 33.2.1 (see package.json engines)
         node-version: [18, 20, 22]
 
     steps:
@@ -38,10 +37,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for file in main.js preload.js renderer/*.js src/*.js test/*.js scripts/*.js; do
+          for file in main.js preload.js renderer/*.js src/*.js test/*.js scripts/*.js e2e/*.js; do
             [ -e "$file" ] || continue
             node --check "$file"
           done
+
+      - name: ESLint security pass
+        run: npm run lint
 
       - name: Verify vendored assets
         run: npm run verify:vendor
@@ -52,6 +54,26 @@ jobs:
       - name: Run main-process smoke tests
         run: npm run test:smoke
 
-      - name: Audit production dependencies
+      - name: Audit production dependencies (fail on high+)
         run: npm audit --omit=dev --audit-level=high
-        continue-on-error: true
+
+  e2e:
+    name: Electron UI (Playwright)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Install Electron binary if missing
+        shell: pwsh
+        run: |
+          if (-not (Test-Path node_modules/electron/dist/electron.exe)) {
+            node node_modules/electron/install.js
+          }
+      - name: Run Playwright Electron tests
+        run: npm run test:e2e
+        env:
+          CUE_NO_PROTECT: "1"

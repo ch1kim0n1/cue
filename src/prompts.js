@@ -11,6 +11,7 @@ const MODES = {
     needsScreen: true,
     userBubble: null,
     small: false,
+    maxTokens: 4096,
     system:
       'You are Cue, a discreet real-time copilot overlaid on the user\'s screen during a call or coding session. ' +
       'Look at the screenshot and the recent conversation, decide what the user needs right now, and deliver it directly with no preamble. ' +
@@ -27,6 +28,7 @@ const MODES = {
     needsScreen: false,
     userBubble: 'What should I say?',
     small: false,
+    maxTokens: 1024,
     system:
       'You are Cue, whispering suggested replies to the user during a live conversation. ' +
       '"Them" is the other person; "You" is the user. Based on what Them just said and what You already said, ' +
@@ -42,6 +44,7 @@ const MODES = {
     needsScreen: false,
     userBubble: 'Follow-up questions',
     small: true,
+    maxTokens: 1024,
     system:
       'You are Cue. Given the conversation, suggest 2 to 4 sharp, relevant follow-up questions the user could ask next ' +
       'to sound engaged and drive the discussion. Return them as a short bullet list, nothing else.',
@@ -55,6 +58,7 @@ const MODES = {
     needsScreen: false,
     userBubble: 'Recap',
     small: true,
+    maxTokens: 1024,
     system:
       'You are Cue. Summarize the conversation so far for someone who joined late: ' +
       'a few key points, any decisions, and action items. Use short bullets under bold headers. Be brief.',
@@ -68,6 +72,7 @@ const MODES = {
     needsScreen: true,
     userBubble: null,
     small: false,
+    maxTokens: 4096,
     system:
       'You are Cue, a real-time copilot with access to the user\'s screen and live conversation. ' +
       'Answer the user\'s question directly and concisely, grounded in what is on screen and what was said. No preamble.',
@@ -81,6 +86,7 @@ const MODES = {
     needsScreen: true,
     userBubble: 'Solve what\'s on screen',
     small: false,
+    maxTokens: 4096,
     system:
       'You are an expert competitive programmer. The screenshot contains a coding problem. ' +
       'Respond with: (1) a one-line restatement, (2) a short approach, (3) a clean, correct, idiomatic solution in a fenced code block ' +

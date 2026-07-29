@@ -15,6 +15,8 @@ const { friendlyProviderError, withTimeout } = require('./src/errors');
 const { providerLabel } = require('./src/secrets');
 const { createLogger } = require('./src/logger');
 const { hasProviderKey } = require('./src/settings-model');
+const { contentProtectionWarning, screenshotFailureMessage } = require('./src/capabilities');
+const os = require('os');
 
 const FEATURE_TIMEOUT_MS = 45000;
 const STT_TIMEOUT_MS = 30000;
@@ -278,9 +280,11 @@ async function runFeature(mode, userText) {
     let imageDataUrl = null;
     if (def.needsScreen) {
       try {
-        imageDataUrl = await captureScreenshot();
-        if (!imageDataUrl) {
-          send('status', { message: 'Screenshot came back empty. Grant screen capture permission, or try outside Remote Desktop/VM.' });
+        const shot = await captureScreenshot();
+        if (!shot.ok) {
+          send('status', { message: screenshotFailureMessage(shot) || screenPermissionMessage() });
+        } else {
+          imageDataUrl = shot.dataUrl;
         }
       } catch (e) {
         log.error('screenshot failed', e && e.message);
@@ -293,6 +297,7 @@ async function runFeature(mode, userText) {
       system: appendResumeContext(def.system, settings.resumeContext),
       turns: [{ role: 'user', text: built }],
       imageDataUrl,
+      maxTokens: def.maxTokens || 4096,
       onToken: (t) => send('llm:token', { text: t })
     }), FEATURE_TIMEOUT_MS, 'Model response');
     send('llm:done', {});
@@ -475,6 +480,12 @@ app.whenReady().then(() => {
   createWindow();
   registerShortcuts();
   setupAutoUpdater();
+
+  const protectWarn = contentProtectionWarning(process.platform, os.release());
+  if (protectWarn) {
+    log.warn(protectWarn);
+    setTimeout(() => send('status', { message: protectWarn }), 1200);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
