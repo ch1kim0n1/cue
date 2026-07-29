@@ -36,4 +36,18 @@ test('builds an empty-state prompt when no conversation has been captured', () =
   const prompt = MODES.say.build({ transcript: [] });
 
   assert.match(prompt, /nothing heard yet/);
+  assert.match(prompt, /What should I say next\?/);
+});
+
+test('assist and leetcode modes request the screen', () => {
+  assert.equal(MODES.assist.needsScreen, true);
+  assert.equal(MODES.leetcode.needsScreen, true);
+  assert.equal(MODES.say.needsScreen, false);
+});
+
+test('recap uses the full transcript without a limit slice', () => {
+  const transcript = Array.from({ length: 5 }, (_, i) => ({ channel: 'you', text: 't' + i }));
+  const prompt = MODES.recap.build({ transcript });
+  assert.match(prompt, /You: t0/);
+  assert.match(prompt, /You: t4/);
 });

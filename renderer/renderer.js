@@ -1,40 +1,72 @@
-/* cue renderer — UI state, mic capture, IPC, streaming render. */
+/* Cue renderer — UI, capture, IPC, GSAP motion. */
 (function () {
   const { icon } = window.ICONS;
-  const cue = window.cue; // exposed by preload
+  const cue = window.cue;
+  const gsap = window.gsap;
   const $ = (s) => document.querySelector(s);
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const cmdKey = cue.platform === 'darwin' ? '⌘' : 'Ctrl';
   const isCmdOrCtrl = (e) => cue.platform === 'darwin' ? e.metaKey : e.ctrlKey;
   const DEFAULT_ASSIST_SHORTCUT = 'CommandOrControl+Return';
 
-  // ---- paint icons -------------------------------------------------------
   $('#logo-btn').innerHTML = icon('logo', { size: 18 });
   $('.tb-hide .chev').innerHTML = icon('chevron-down', { size: 14 });
   $('#stop-btn').innerHTML = icon('stop-square', { size: 15 });
-  document.querySelector('.act[data-mode="assist"] .ic').innerHTML = icon('sparkles', { size: 16 });
-  document.querySelector('.act[data-mode="say"] .ic').innerHTML = icon('wand-sparkles', { size: 16 });
-  document.querySelector('.act[data-mode="followup"] .ic').innerHTML = icon('message-circle', { size: 16 });
-  document.querySelector('.act[data-mode="recap"] .ic').innerHTML = icon('refresh-cw', { size: 16 });
-  $('#smart-toggle .ic').innerHTML = icon('zap', { size: 14 });
+  $('#transcript-btn').innerHTML = icon('list', { size: 15 });
+  document.querySelector('.act[data-mode="assist"] .ic').innerHTML = icon('sparkles', { size: 15 });
+  document.querySelector('.act[data-mode="say"] .ic').innerHTML = icon('wand-sparkles', { size: 15 });
+  document.querySelector('.act[data-mode="followup"] .ic').innerHTML = icon('message-circle', { size: 15 });
+  document.querySelector('.act[data-mode="recap"] .ic').innerHTML = icon('refresh-cw', { size: 15 });
+  $('#smart-toggle .ic').innerHTML = icon('zap', { size: 13 });
   $('#more-btn').innerHTML = icon('more-horizontal', { size: 18 });
-  $('#send-btn').innerHTML = icon('play', { size: 15 });
+  $('#send-btn').innerHTML = icon('play', { size: 14 });
 
-  // ---- state -------------------------------------------------------------
   let settings = null;
   let busy = false;
-  let aiEl = null;       // current streaming <div class="ai-text">
+  let aiEl = null;
   let caretEl = null;
+  let lastRawResponse = '';
   let assistShortcut = DEFAULT_ASSIST_SHORTCUT;
   let recordingShortcut = false;
+  const localTranscript = [];
 
   const messages = $('#messages');
+  const responseActions = $('#response-actions');
 
-  function esc(s) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+  function canAnimate() { return !!(gsap && !reduceMotion); }
+
+  function animateIn(el, vars) {
+    if (!el) return;
+    if (!canAnimate()) {
+      el.style.opacity = '1';
+      el.style.transform = 'none';
+      return;
+    }
+    gsap.fromTo(el, { opacity: 0, y: vars && vars.y != null ? vars.y : 8, scale: vars && vars.scale != null ? vars.scale : 0.985 }, {
+      opacity: 1, y: 0, scale: 1, duration: vars && vars.duration || 0.34,
+      ease: 'power3.out', overwrite: true
+    });
+  }
+
+  function pulseLive(on) {
+    const dot = $('#live-dot');
+    if (!canAnimate() || !dot) return;
+    gsap.killTweensOf(dot);
+    if (on) {
+      gsap.to(dot, { scale: 1.25, duration: 0.7, yoyo: true, repeat: -1, ease: 'sine.inOut' });
+    } else {
+      gsap.set(dot, { scale: 1 });
+    }
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
 
   function shortcutParts(accelerator) {
     const labels = {
       CommandOrControl: cue.platform === 'darwin' ? '⌘' : 'Ctrl',
-      Command: '⌘', Control: 'Ctrl', Super: 'Super',
+      Command: '⌘', Control: 'Ctrl', Super: 'Win',
       Alt: cue.platform === 'darwin' ? '⌥' : 'Alt',
       Shift: cue.platform === 'darwin' ? '⇧' : 'Shift',
       Return: 'Enter', Escape: 'Esc', Space: 'Space',
@@ -52,40 +84,71 @@
     const shortcutBtn = $('#shortcut-assist');
     if (shortcutBtn && !recordingShortcut) shortcutBtn.textContent = shortcutParts(assistShortcut).join(' + ');
     const placeholder = $('#placeholder');
-    if (placeholder) placeholder.innerHTML = 'Ask about your screen or conversation, or ' + shortcutKeycapsHtml(assistShortcut) + ' for Assist';
+    if (placeholder) {
+      placeholder.innerHTML = 'Ask about your screen or conversation, or ' +
+        shortcutKeycapsHtml(assistShortcut) + ' for Assist';
+    }
   }
 
-  // minimal, safe markdown: fenced code, bullets, inline code, bold, paragraphs
   function renderMarkdown(text) {
     const lines = text.split('\n');
-    let html = '', inCode = false, inList = false, buf = [];
-    const flushP = () => { if (buf.length) { html += '<p>' + inline(buf.join(' ')) + '</p>'; buf = []; } };
+    let html = '';
+    let inCode = false;
+    let inList = false;
+    let buf = [];
+    const flushP = () => {
+      if (buf.length) { html += '<p>' + inline(buf.join(' ')) + '</p>'; buf = []; }
+    };
     const inline = (s) => esc(s)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     for (const raw of lines) {
       const line = raw;
       if (/^```/.test(line.trim())) {
-        if (!inCode) { flushP(); if (inList) { html += '</ul>'; inList = false; } html += '<pre><code>'; inCode = true; }
-        else { html += '</code></pre>'; inCode = false; }
+        if (!inCode) {
+          flushP();
+          if (inList) { html += '</ul>'; inList = false; }
+          html += '<pre><code>';
+          inCode = true;
+        } else {
+          html += '</code></pre>';
+          inCode = false;
+        }
         continue;
       }
       if (inCode) { html += esc(line) + '\n'; continue; }
-      if (/^\s*[-*]\s+/.test(line)) { flushP(); if (!inList) { html += '<ul>'; inList = true; } html += '<li>' + inline(line.replace(/^\s*[-*]\s+/, '')) + '</li>'; continue; }
-      if (line.trim() === '') { flushP(); if (inList) { html += '</ul>'; inList = false; } continue; }
+      if (/^\s*[-*]\s+/.test(line)) {
+        flushP();
+        if (!inList) { html += '<ul>'; inList = true; }
+        html += '<li>' + inline(line.replace(/^\s*[-*]\s+/, '')) + '</li>';
+        continue;
+      }
+      if (line.trim() === '') {
+        flushP();
+        if (inList) { html += '</ul>'; inList = false; }
+        continue;
+      }
       buf.push(line.trim());
     }
-    flushP(); if (inList) html += '</ul>'; if (inCode) html += '</code></pre>';
+    flushP();
+    if (inList) html += '</ul>';
+    if (inCode) html += '</code></pre>';
     return html;
   }
 
-  function clearMessages() { messages.innerHTML = ''; aiEl = null; caretEl = null; }
+  function clearMessages() {
+    messages.innerHTML = '';
+    aiEl = null;
+    caretEl = null;
+    responseActions.classList.add('hidden');
+  }
 
   function addUserBubble(text) {
     const b = document.createElement('div');
     b.className = 'user-bubble';
     b.textContent = text;
     messages.appendChild(b);
+    animateIn(b, { y: 6, duration: 0.28 });
   }
 
   function startAi(small) {
@@ -96,6 +159,7 @@
     caretEl.className = 'ai-caret';
     aiEl.appendChild(caretEl);
     messages.appendChild(aiEl);
+    animateIn(aiEl, { y: 4, duration: 0.22 });
   }
 
   function appendToken(t) {
@@ -110,13 +174,34 @@
   function finalizeAi() {
     if (!aiEl) return;
     const raw = aiEl.dataset.raw || '';
+    lastRawResponse = raw;
     aiEl.innerHTML = renderMarkdown(raw);
-    aiEl = null; caretEl = null;
+    aiEl = null;
+    caretEl = null;
+    responseActions.classList.remove('hidden');
+    animateIn(responseActions, { y: 4, duration: 0.24 });
   }
 
-  function setBusy(v) { busy = v; $('#send-btn').classList.toggle('busy', v); }
+  function setBusy(v) {
+    busy = v;
+    $('#send-btn').classList.toggle('busy', v);
+  }
 
-  // ---- actions -----------------------------------------------------------
+  function applyOpacity(value) {
+    const opacity = Math.min(1, Math.max(0.55, Number(value) || 0.92));
+    document.documentElement.style.setProperty('--panel-opacity', String(opacity));
+    const range = $('#opacity-range');
+    const label = $('#opacity-value');
+    if (range) range.value = String(Math.round(opacity * 100));
+    if (label) label.textContent = Math.round(opacity * 100) + '%';
+    return opacity;
+  }
+
+  function applyCompact(on) {
+    document.body.classList.toggle('compact', !!on);
+    $('#compact-toggle').classList.toggle('on', !!on);
+  }
+
   function runMode(mode, text) {
     if (busy) return;
     setBusy(true);
@@ -136,27 +221,40 @@
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 140) + 'px';
   }
+
   input.addEventListener('input', syncPlaceholder);
-  input.addEventListener('focus', () => { composer.classList.add('focused'); placeholder.classList.add('hidden'); });
-  input.addEventListener('blur', () => { composer.classList.remove('focused'); syncPlaceholder(); });
+  input.addEventListener('focus', () => {
+    composer.classList.add('focused');
+    placeholder.classList.add('hidden');
+  });
+  input.addEventListener('blur', () => {
+    composer.classList.remove('focused');
+    syncPlaceholder();
+  });
   $('#input-area').addEventListener('click', () => input.focus());
 
   function send() {
     const text = input.value.trim();
     if (!text) { runMode('assist', ''); return; }
-    input.value = ''; syncPlaceholder();
+    input.value = '';
+    syncPlaceholder();
     runMode('ask', text);
   }
+
   $('#send-btn').addEventListener('click', send);
   input.addEventListener('keydown', (e) => {
     const captured = keyEventToAccelerator(e);
     if (captured.accelerator && captured.accelerator.toLowerCase() === assistShortcut.toLowerCase()) {
-      e.preventDefault(); runMode('assist', ''); return;
+      e.preventDefault();
+      runMode('assist', '');
+      return;
     }
-    if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); send(); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      send();
+    }
   });
 
-  // Smart toggle
   const smartBtn = $('#smart-toggle');
   smartBtn.addEventListener('click', async () => {
     settings.smart = !settings.smart;
@@ -164,38 +262,89 @@
     await cue.settingsSet({ smart: settings.smart });
   });
 
-  // Hide / collapse
+  $('#compact-toggle').addEventListener('click', async () => {
+    settings.compact = !settings.compact;
+    applyCompact(settings.compact);
+    await cue.settingsSet({ compact: settings.compact });
+  });
+
   $('#hide-btn').addEventListener('click', () => {
-    const collapsed = $('#panel').classList.toggle('collapsed');
+    const panel = $('#panel');
+    const collapsed = !panel.classList.contains('collapsed');
+    if (collapsed) {
+      if (canAnimate()) {
+        gsap.to(panel, {
+          opacity: 0, y: -6, duration: 0.18, ease: 'power2.in',
+          onComplete: () => {
+            panel.classList.add('collapsed');
+            gsap.set(panel, { clearProps: 'opacity,y' });
+          }
+        });
+      } else {
+        panel.classList.add('collapsed');
+      }
+    } else {
+      panel.classList.remove('collapsed');
+      animateIn(panel, { y: -6, duration: 0.28 });
+    }
     $('#hide-btn').classList.toggle('collapsed', collapsed);
     $('#live-dot').style.display = collapsed ? 'none' : '';
   });
 
-  // Stop = start/stop listening. Kick off system-audio capture straight from the click so
-  // the user-gesture is fresh for getDisplayMedia (loopback capture needs it).
   $('#stop-btn').addEventListener('click', () => {
     const turningOn = !$('#stop-btn').classList.contains('active');
     if (turningOn) startSystemAudio();
     cue.captureToggle();
   });
 
-  // ---- capture: mic (renderer side) --------------------------------------
+  $('#copy-btn').addEventListener('click', async () => {
+    if (!lastRawResponse) return;
+    try {
+      await navigator.clipboard.writeText(lastRawResponse);
+      $('#copy-btn').textContent = 'Copied';
+      setTimeout(() => { $('#copy-btn').textContent = 'Copy'; }, 1200);
+    } catch (_) {
+      showStatus('Could not copy to clipboard.');
+    }
+  });
+
+  $('#retry-btn').addEventListener('click', async () => {
+    if (busy) return;
+    const result = await cue.featureRetry();
+    if (!result.ok) showStatus(result.error || 'Nothing to retry yet.');
+  });
+
+  $('#clear-session-btn').addEventListener('click', async () => {
+    await cue.transcriptClear();
+    localTranscript.length = 0;
+    renderTranscriptList();
+    showStatus('Session transcript cleared.');
+  });
+
+  // Mic
   let audioCtx = null, micStream = null, micNode = null, micProc = null;
   async function startMic() {
     if (micStream) return;
     try {
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
+      });
       audioCtx = new AudioContext({ sampleRate: 16000 });
       await audioCtx.audioWorklet.addModule('./pcm-processor.js');
       micNode = audioCtx.createMediaStreamSource(micStream);
       micProc = new AudioWorkletNode(audioCtx, 'pcm-processor');
       micProc.port.onmessage = (e) => cue.micPcm(e.data);
-      const sink = audioCtx.createGain(); sink.gain.value = 0; // run processor silently
-      micNode.connect(micProc); micProc.connect(sink); sink.connect(audioCtx.destination);
+      const sink = audioCtx.createGain();
+      sink.gain.value = 0;
+      micNode.connect(micProc);
+      micProc.connect(sink);
+      sink.connect(audioCtx.destination);
     } catch (err) {
       cue.log('mic error: ' + (err && err.message));
+      showStatus('Microphone blocked. Allow Cue in your system privacy settings.');
     }
   }
+
   function stopMic() {
     if (micProc) { micProc.port.onmessage = null; micProc.disconnect(); micProc = null; }
     if (micNode) { micNode.disconnect(); micNode = null; }
@@ -203,28 +352,39 @@
     if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
   }
 
-  // ---- capture: system/meeting audio (getDisplayMedia loopback, in cue's process) ----
   let sysStream = null, sysCtx = null, sysNode = null, sysProc = null;
   async function startSystemAudio() {
     if (sysStream) return;
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-      stream.getVideoTracks().forEach((t) => t.stop()); // we only want the audio
+      stream.getVideoTracks().forEach((t) => t.stop());
       const tracks = stream.getAudioTracks();
-      if (!tracks.length) { cue.log('system audio: no loopback track (macOS loopback unsupported here)'); stream.getTracks().forEach((t) => t.stop()); return; }
+      if (!tracks.length) {
+        cue.log('system audio: no loopback track');
+        stream.getTracks().forEach((t) => t.stop());
+        showStatus(cue.platform === 'win32'
+          ? 'No system audio track. Share a screen/window with audio enabled when prompted.'
+          : 'No system audio track available for meeting capture.');
+        return;
+      }
       sysStream = stream;
       sysCtx = new AudioContext({ sampleRate: 16000 });
       await sysCtx.audioWorklet.addModule('./pcm-processor.js');
       sysNode = sysCtx.createMediaStreamSource(new MediaStream(tracks));
       sysProc = new AudioWorkletNode(sysCtx, 'pcm-processor');
       sysProc.port.onmessage = (e) => cue.systemPcm(e.data);
-      const sink = sysCtx.createGain(); sink.gain.value = 0;
-      sysNode.connect(sysProc); sysProc.connect(sink); sink.connect(sysCtx.destination);
+      const sink = sysCtx.createGain();
+      sink.gain.value = 0;
+      sysNode.connect(sysProc);
+      sysProc.connect(sink);
+      sink.connect(sysCtx.destination);
       cue.log('system audio: capturing loopback');
     } catch (err) {
       cue.log('system audio error: ' + (err && err.message));
+      showStatus('System audio capture was cancelled or blocked.');
     }
   }
+
   function stopSystemAudio() {
     if (sysProc) { sysProc.port.onmessage = null; sysProc.disconnect(); sysProc = null; }
     if (sysNode) { sysNode.disconnect(); sysNode = null; }
@@ -232,15 +392,14 @@
     if (sysStream) { sysStream.getTracks().forEach((t) => t.stop()); sysStream = null; }
   }
 
-  // ---- events from main --------------------------------------------------
   cue.on('capture:state', ({ active }) => {
     $('#live-dot').classList.toggle('off', !active);
     $('#stop-btn').classList.toggle('active', active);
-    // System audio is started directly from the button click above so the
-    // getDisplayMedia request keeps its user gesture. Starting it here too
-    // can create a second capture request before the first one resolves.
-    if (active) startMic(); else { stopMic(); stopSystemAudio(); }
+    pulseLive(active);
+    if (active) startMic();
+    else { stopMic(); stopSystemAudio(); }
   });
+
   cue.on('llm:start', ({ userBubble, small }) => {
     clearMessages();
     if (userBubble) addUserBubble(userBubble);
@@ -251,8 +410,11 @@
   cue.on('llm:done', () => { finalizeAi(); setBusy(false); });
   cue.on('llm:error', ({ message }) => {
     if (!aiEl) startAi(true);
-    aiEl.dataset.raw = message; finalizeAi(); setBusy(false);
+    aiEl.dataset.raw = message;
+    finalizeAi();
+    setBusy(false);
   });
+
   let statusTimer = null;
   function showStatus(message) {
     let el = document.getElementById('cue-status');
@@ -260,53 +422,138 @@
       el = document.createElement('div');
       el.id = 'cue-status';
       const panel = document.getElementById('panel');
-      panel.insertBefore(el, document.getElementById('action-row'));
+      panel.insertBefore(el, document.getElementById('response-actions'));
     }
     el.textContent = message;
     el.classList.add('show');
+    animateIn(el, { y: 4, duration: 0.22 });
     clearTimeout(statusTimer);
     statusTimer = setTimeout(() => el.classList.remove('show'), 11000);
   }
   cue.on('status', ({ message }) => { cue.log('[status] ' + message); showStatus(message); });
 
-  // ---- settings ----------------------------------------------------------
+  function renderTranscriptList() {
+    const list = $('#transcript-list');
+    const empty = $('#transcript-empty');
+    list.innerHTML = '';
+    if (!localTranscript.length) {
+      empty.classList.remove('hidden');
+      return;
+    }
+    empty.classList.add('hidden');
+    localTranscript.forEach((turn) => {
+      const row = document.createElement('div');
+      row.className = 'td-turn ' + (turn.channel === 'them' ? 'them' : 'you');
+      row.innerHTML = '<div class="who">' + (turn.channel === 'them' ? 'Them' : 'You') +
+        '</div><div class="txt">' + esc(turn.text) + '</div>';
+      list.appendChild(row);
+    });
+    list.scrollTop = list.scrollHeight;
+  }
+
+  cue.on('transcript', (turn) => {
+    localTranscript.push(turn);
+    renderTranscriptList();
+  });
+  cue.on('transcript:cleared', () => {
+    localTranscript.length = 0;
+    renderTranscriptList();
+  });
+
+  const drawer = $('#transcript-drawer');
+  function openTranscript() {
+    drawer.classList.remove('hidden');
+    renderTranscriptList();
+    animateIn(drawer, { y: 10, duration: 0.3 });
+    setIgnore(false);
+  }
+  function closeTranscript() { drawer.classList.add('hidden'); }
+
+  $('#transcript-btn').addEventListener('click', () => {
+    if (drawer.classList.contains('hidden')) openTranscript();
+    else closeTranscript();
+  });
+  $('#close-transcript').addEventListener('click', closeTranscript);
+  $('#clear-transcript').addEventListener('click', async () => {
+    await cue.transcriptClear();
+    localTranscript.length = 0;
+    renderTranscriptList();
+  });
+  $('#export-transcript').addEventListener('click', async () => {
+    const turns = localTranscript.length ? localTranscript : await cue.transcriptGet();
+    if (!turns.length) {
+      showStatus('No transcript to export yet.');
+      return;
+    }
+    const text = turns.map((t) => (t.channel === 'them' ? 'Them: ' : 'You: ') + t.text).join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      showStatus('Transcript copied to clipboard.');
+    } catch (_) {
+      showStatus('Could not copy transcript.');
+    }
+  });
+
   const scrim = $('#settings-scrim');
-  function openSettings() { fillSettings(); scrim.classList.remove('hidden'); }
-  function closeSettings() { cancelShortcutRecording(); saveSettings(); scrim.classList.add('hidden'); }
+  function openSettings() {
+    fillSettings();
+    scrim.classList.remove('hidden');
+    animateIn($('#settings'), { y: 12, scale: 0.97, duration: 0.32 });
+  }
+  function closeSettings() {
+    cancelShortcutRecording();
+    saveSettings();
+    scrim.classList.add('hidden');
+  }
   $('#more-btn').addEventListener('click', openSettings);
   $('#s-close').addEventListener('click', closeSettings);
   scrim.addEventListener('click', (e) => { if (e.target === scrim) closeSettings(); });
 
   function fillSettings() {
-    document.querySelectorAll('#provider-seg button').forEach((b) => b.classList.toggle('on', b.dataset.provider === settings.provider));
+    document.querySelectorAll('#provider-seg button').forEach((b) => {
+      b.classList.toggle('on', b.dataset.provider === settings.provider);
+    });
     $('#key-openai').value = settings.apiKeys.openai || '';
     $('#key-anthropic').value = settings.apiKeys.anthropic || '';
     $('#key-gemini').value = settings.apiKeys.gemini || '';
     $('#key-nvidia').value = settings.apiKeys.nvidia || '';
     $('#resume-context').value = settings.resumeContext || '';
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
-    $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
+    $('#model-fast').value = m.fast;
+    $('#model-smart').value = m.smart;
+    applyOpacity(settings.opacity);
     syncAssistShortcutLabels();
     $('#s-status').textContent = statusText();
   }
+
   $('#clear-resume').addEventListener('click', async () => {
     $('#resume-context').value = '';
     settings.resumeContext = '';
     await cue.settingsSet({ resumeContext: '' });
   });
+
+  $('#opacity-range').addEventListener('input', async (e) => {
+    const opacity = applyOpacity(Number(e.target.value) / 100);
+    settings.opacity = opacity;
+    await cue.settingsSet({ opacity });
+  });
+
   function statusText() {
     const k = settings.apiKeys;
     const has = [k.openai && 'OpenAI', k.anthropic && 'Anthropic', k.gemini && 'Gemini', k.nvidia && 'Nvidia'].filter(Boolean);
     const stt = k.openai ? 'Whisper' : (k.gemini ? 'Gemini' : 'none');
     return 'Active: ' + settings.provider + ' · keys: ' + (has.join(', ') || 'none set') + ' · transcription: ' + stt;
   }
+
   document.querySelectorAll('#provider-seg button').forEach((b) => b.addEventListener('click', () => {
     settings.provider = b.dataset.provider;
     document.querySelectorAll('#provider-seg button').forEach((x) => x.classList.toggle('on', x === b));
     const m = settings.models[settings.provider] || { fast: '', smart: '' };
-    $('#model-fast').value = m.fast; $('#model-smart').value = m.smart;
+    $('#model-fast').value = m.fast;
+    $('#model-smart').value = m.smart;
     $('#s-status').textContent = statusText();
   }));
+
   async function saveSettings() {
     settings.apiKeys.openai = $('#key-openai').value.trim();
     settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
@@ -316,11 +563,10 @@
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
     settings.models[settings.provider].fast = $('#model-fast').value.trim();
     settings.models[settings.provider].smart = $('#model-smart').value.trim();
+    settings.opacity = applyOpacity(Number($('#opacity-range').value) / 100);
     await cue.settingsSet(settings);
   }
 
-  // Assist shortcut recorder. The renderer captures a key combination and the
-  // main process only saves it after Electron confirms the global registration.
   const shortcutBtn = $('#shortcut-assist');
   const shortcutHint = $('#shortcut-hint');
 
@@ -360,7 +606,7 @@
     if (!key && /^[0-9]$/.test(e.key)) key = e.key;
     if (!key && /^F(?:[1-9]|1[0-9]|2[0-4])$/.test(e.key)) key = e.key;
     if (!key) return { error: 'Use a letter, number, function key, arrow, or common navigation key.' };
-    if (!parts.length && !/^F/.test(key)) return { error: 'Include Command/Ctrl, Alt, or Shift in the shortcut.' };
+    if (!parts.length && !/^F/.test(key)) return { error: 'Include Ctrl/Cmd, Alt, or Shift in the shortcut.' };
     parts.push(key);
     return { accelerator: parts.join('+') };
   }
@@ -369,18 +615,18 @@
     const wasRecording = recordingShortcut;
     recordingShortcut = false;
     shortcutBtn.classList.remove('recording');
-    shortcutBtn.textContent = 'Saving…';
+    shortcutBtn.textContent = 'Saving...';
     let result;
     try {
       result = await cue.shortcutAssistSet(accelerator);
     } catch (_) {
-      result = { ok: false, error: 'cue could not update the shortcut. Please try again.' };
+      result = { ok: false, error: 'Cue could not update the shortcut. Try again.' };
     }
     if (!result.ok) {
       setShortcutHint(result.error, 'error');
       recordingShortcut = wasRecording;
       shortcutBtn.classList.toggle('recording', recordingShortcut);
-      if (recordingShortcut) shortcutBtn.textContent = 'Press keys…';
+      if (recordingShortcut) shortcutBtn.textContent = 'Press keys...';
       else syncAssistShortcutLabels();
       return;
     }
@@ -394,7 +640,7 @@
   shortcutBtn.addEventListener('click', () => {
     recordingShortcut = true;
     shortcutBtn.classList.add('recording');
-    shortcutBtn.textContent = 'Press keys…';
+    shortcutBtn.textContent = 'Press keys...';
     setShortcutHint('Press Escape to cancel.', '');
   });
 
@@ -417,25 +663,27 @@
     applyAssistShortcut(captured.accelerator);
   }, true);
 
-  // ---- example conversation (matches the reference screenshot) ------------
   function showExample() {
     clearMessages();
     addUserBubble('What should I say?');
     const ai = document.createElement('div');
     ai.className = 'ai-text';
-    ai.textContent = '“A discounted cash flow model values a company by projecting future free cash flows and discounting them to present value using the weighted average cost of capital.”';
+    ai.textContent = 'A discounted cash flow model values a company by projecting future free cash flows and discounting them to present value using the weighted average cost of capital.';
     messages.appendChild(ai);
+    lastRawResponse = ai.textContent;
+    responseActions.classList.remove('hidden');
+    animateIn(ai, { y: 4, duration: 0.28 });
   }
 
-  // ---- global keys -------------------------------------------------------
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !scrim.classList.contains('hidden')) closeSettings();
-    if (isCmdOrCtrl(e)) {
-      if (e.key === ',') { e.preventDefault(); openSettings(); }
+    if (e.key === 'Escape' && !drawer.classList.contains('hidden')) closeTranscript();
+    if (isCmdOrCtrl(e) && e.key === ',') {
+      e.preventDefault();
+      openSettings();
     }
   });
 
-  // UI Zoom buttons (text only)
   let currentZoom = 1;
   function updateZoom(delta) {
     currentZoom = Math.max(0.5, Math.min(3, currentZoom + delta));
@@ -444,88 +692,126 @@
   $('#zoom-in-btn').addEventListener('click', () => updateZoom(0.1));
   $('#zoom-out-btn').addEventListener('click', () => updateZoom(-0.1));
 
-  // ---- click-through: only the UI blocks the mouse; empty gaps pass to your screen ----
   let ignoring = null;
-  function setIgnore(v) { if (v !== ignoring) { ignoring = v; cue.setIgnoreMouse(v); } }
+  function setIgnore(v) {
+    if (v !== ignoring) {
+      ignoring = v;
+      cue.setIgnoreMouse(v);
+    }
+  }
   document.addEventListener('mousemove', (e) => {
     const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim'));
+    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #transcript-drawer'));
     setIgnore(!overUI);
   });
-  setIgnore(true); // start fully click-through; hovering the panel re-enables it
+  setIgnore(true);
 
-  // ---- onboarding / first-run tutorial -----------------------------------
   const obScrim = $('#onboard-scrim');
   const OB_STEPS = [
     {
-      icon: '👋',
-      title: 'Welcome to cue',
-      body: 'cue is a private AI copilot that floats over your screen. It can <strong>see your screen</strong>, <strong>hear your meetings</strong>, and help you answer questions or solve coding problems — while staying hidden from most screen shares.<br><br>This quick guide gets you running in about a minute.'
+      mark: 'logo',
+      title: 'Welcome to Cue',
+      body: 'Cue is a private AI overlay for meetings and code. It can <strong>see your screen</strong>, <strong>hear your conversation</strong>, and stay out of most screen shares.<br><br>About one minute to set up.'
     },
     ...(cue.platform === 'darwin' ? [{
-      icon: '🔐',
-      title: 'Allow cue to see & hear',
-      body: 'cue needs two macOS permissions. Click each button, turn <strong>cue</strong> ON in the window that opens, then come back here.<ul><li><strong>Microphone</strong> — to hear you</li><li><strong>Screen Recording</strong> — to see your screen and hear meeting audio</li></ul>',
+      mark: 'settings',
+      title: 'Allow Cue to see and hear',
+      body: 'Cue needs two macOS permissions. Click each button, turn <strong>Cue</strong> on, then return here.<ul><li><strong>Microphone</strong> so Cue can hear you</li><li><strong>Screen Recording</strong> so Cue can see your screen and capture meeting audio</li></ul>',
       buttons: [
         { label: 'Open Microphone settings', action: () => cue.openPane('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone') },
         { label: 'Open Screen Recording settings', action: () => cue.openPane('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture') }
       ]
+    }] : cue.platform === 'win32' ? [{
+      mark: 'settings',
+      title: 'Windows permissions',
+      body: 'Cue runs as a desktop app on Windows.<ul><li>Allow <strong>microphone</strong> access when Windows asks (Settings &gt; Privacy &amp; security &gt; Microphone)</li><li>When you start listening, choose a screen/window and keep <strong>Share system audio</strong> on if available</li><li>Screen capture uses Electron desktopCapturer; no extra helper binary</li></ul>'
     }] : []),
     {
-      icon: '🔑',
+      mark: 'zap',
       title: 'Connect an AI provider',
-      body: 'cue uses <strong>your own</strong> API key — pick <span class="hl">OpenAI</span>, <span class="hl">Anthropic</span>, <span class="hl">Google Gemini</span>, or <span class="hl">Nvidia</span>. Get a key from your provider, then paste it into cue\'s Settings.<br><br><strong>Tip:</strong> the listening features need speech-to-text access (an OpenAI key with Whisper, or a Gemini key). A chat-only key still powers screen &amp; coding help.',
-      buttons: [{ label: 'Open cue Settings', action: () => { finishOnboard(); openSettings(); } }]
+      body: 'Cue uses <strong>your</strong> API key. Pick <span class="hl">OpenAI</span>, <span class="hl">Anthropic</span>, <span class="hl">Gemini</span>, or <span class="hl">Nvidia</span>, then paste the key in Settings.<br><br>Listening needs speech-to-text (OpenAI with Whisper, or Gemini). A chat-only key still powers screen and coding help.',
+      buttons: [{ label: 'Open Settings', action: () => { finishOnboard(); openSettings(); } }]
     },
     {
-      icon: '🫥',
+      mark: 'list',
       title: 'Stay hidden in Zoom',
-      body: cue.platform === 'darwin'
-        ? 'cue is hidden from most screen shares automatically (Google Meet, Teams, QuickTime — nothing to do). <strong>Zoom needs one setting:</strong><br><br>Zoom → <span class="hl">Settings</span> → <span class="hl">Share Screen</span> → <span class="hl">Advanced</span> → <strong>Screen capture mode</strong> → choose <strong>“Advanced capture with window filtering.”</strong><br><br>Avoid “<strong>without</strong> window filtering” — that mode reveals cue.'
-        : 'cue is hidden from screen shares automatically. <strong>For Zoom:</strong><br><br>Zoom → <span class="hl">Settings</span> → <span class="hl">Share Screen</span> → <span class="hl">Advanced</span> → <strong>Screen capture mode</strong> → choose <strong>“Advanced capture with window filtering.”</strong>'
+      body: 'Cue asks the OS to exclude this window from capture. That is best-effort, not a guarantee.<br><br><strong>Zoom:</strong> Settings &gt; Share Screen &gt; Advanced &gt; Screen capture mode &gt; <strong>Advanced capture with window filtering</strong>.'
     },
     {
-      icon: '✨',
-      title: 'You’re all set',
-      body: () => `How to use cue:<ul><li>${shortcutKeycapsHtml(assistShortcut, 'kbd')} — <strong>Assist</strong> with whatever's on screen or being said</li><li><span class="kbd">${cmdKey}</span> <span class="kbd">H</span> — solve a coding problem on screen</li><li>Click <strong>▢</strong> in the top bar to start listening to a meeting</li><li>Type a question and press <span class="kbd">↵</span></li></ul>Reopen this guide anytime by clicking the <strong>cue logo</strong>. Change Assist's shortcut in <strong>Settings</strong>. Quit with <span class="kbd">${cmdKey}</span><span class="kbd">⇧</span><span class="kbd">X</span>.`
+      mark: 'sparkles',
+      title: 'Ready',
+      body: () => `Quick controls:<ul><li>${shortcutKeycapsHtml(assistShortcut, 'kbd')} Assist</li><li><span class="kbd">${cmdKey}</span> <span class="kbd">H</span> Solve the coding problem on screen</li><li>Top-bar listen button starts meeting capture</li><li>Transcript drawer shows You / Them turns</li><li>Quit with <span class="kbd">${cmdKey}</span> <span class="kbd">Shift</span> <span class="kbd">X</span></li></ul>Reopen this guide from the Cue logo.`
     }
   ];
+
   let obIndex = 0;
   function renderOnboard() {
     const step = OB_STEPS[obIndex];
-    $('#ob-icon').textContent = step.icon;
+    $('#ob-icon').innerHTML = icon(step.mark || 'logo', { size: 22 });
     $('#ob-title').textContent = step.title;
     $('#ob-body').innerHTML = typeof step.body === 'function' ? step.body() : step.body;
-    const btns = $('#ob-buttons'); btns.innerHTML = '';
-    (step.buttons || []).forEach((b) => { const el = document.createElement('button'); el.textContent = b.label; el.addEventListener('click', b.action); btns.appendChild(el); });
-    const dots = $('#ob-dots'); dots.innerHTML = '';
-    OB_STEPS.forEach((_, i) => { const d = document.createElement('span'); if (i === obIndex) d.className = 'on'; dots.appendChild(d); });
+    const btns = $('#ob-buttons');
+    btns.innerHTML = '';
+    (step.buttons || []).forEach((b) => {
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.textContent = b.label;
+      el.addEventListener('click', b.action);
+      btns.appendChild(el);
+    });
+    const dots = $('#ob-dots');
+    dots.innerHTML = '';
+    OB_STEPS.forEach((_, i) => {
+      const d = document.createElement('span');
+      if (i === obIndex) d.className = 'on';
+      dots.appendChild(d);
+    });
     $('#ob-back').style.visibility = obIndex === 0 ? 'hidden' : 'visible';
     $('#ob-next').textContent = obIndex === OB_STEPS.length - 1 ? 'Done' : 'Next';
     $('#ob-skip').style.visibility = obIndex === OB_STEPS.length - 1 ? 'hidden' : 'visible';
+    animateIn($('#onboard'), { y: 10, scale: 0.98, duration: 0.3 });
   }
-  function showOnboard() { obIndex = 0; renderOnboard(); obScrim.classList.remove('hidden'); setIgnore(false); }
+
+  function showOnboard() {
+    obIndex = 0;
+    renderOnboard();
+    obScrim.classList.remove('hidden');
+    setIgnore(false);
+  }
+
   async function finishOnboard() {
     obScrim.classList.add('hidden');
-    if (settings && !settings.onboarded) { settings.onboarded = true; await cue.settingsSet({ onboarded: true }); }
+    if (settings && !settings.onboarded) {
+      settings.onboarded = true;
+      await cue.settingsSet({ onboarded: true });
+    }
   }
-  $('#ob-next').addEventListener('click', () => { if (obIndex === OB_STEPS.length - 1) finishOnboard(); else { obIndex++; renderOnboard(); } });
-  $('#ob-back').addEventListener('click', () => { if (obIndex > 0) { obIndex--; renderOnboard(); } });
+
+  $('#ob-next').addEventListener('click', () => {
+    if (obIndex === OB_STEPS.length - 1) finishOnboard();
+    else { obIndex++; renderOnboard(); }
+  });
+  $('#ob-back').addEventListener('click', () => {
+    if (obIndex > 0) { obIndex--; renderOnboard(); }
+  });
   $('#ob-skip').addEventListener('click', finishOnboard);
   $('#logo-btn').addEventListener('click', showOnboard);
 
-  // ---- boot --------------------------------------------------------------
   (async function boot() {
     settings = await cue.settingsGet();
     assistShortcut = (settings.shortcuts && settings.shortcuts.assist) || DEFAULT_ASSIST_SHORTCUT;
     syncAssistShortcutLabels();
     smartBtn.classList.toggle('on', !!settings.smart);
+    applyCompact(!!settings.compact);
+    applyOpacity(settings.opacity != null ? settings.opacity : 0.92);
     showExample();
     syncPlaceholder();
     const st = await cue.captureState();
     $('#live-dot').classList.toggle('off', !st.active);
     $('#stop-btn').classList.toggle('active', st.active);
+    pulseLive(!!st.active);
+    animateIn($('#toolbar'), { y: -8, duration: 0.4 });
+    animateIn($('#panel'), { y: 10, duration: 0.42 });
     if (!settings.onboarded) showOnboard();
-
   })();
 })();

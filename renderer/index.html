@@ -2,84 +2,116 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
-  <title>cue</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self'; img-src 'self' data:;" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cue</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div id="app">
-    <!-- Top-center floating pill toolbar (drag handle) -->
     <div id="toolbar">
-      <button class="tb-logo" id="logo-btn" title="cue"></button>
+      <button class="tb-logo" id="logo-btn" title="Cue guide" aria-label="Open Cue guide"></button>
+      <span class="tb-brand">Cue</span>
       <div class="tb-divider"></div>
       <button class="tb-hide" id="hide-btn"><span class="chev"></span><span>Hide</span></button>
       <div class="tb-divider"></div>
-      <button class="tb-stop" id="stop-btn" title="Start / stop listening"></button>
+      <button class="tb-listen" id="stop-btn" title="Start or stop listening" aria-label="Toggle listening"></button>
+      <button class="tb-icon" id="transcript-btn" title="Live transcript" aria-label="Open transcript"></button>
     </div>
 
-    <!-- Main assistant panel -->
     <div id="panel-wrap">
-      <span id="live-dot" class="off"></span>
+      <span id="live-dot" class="off" aria-hidden="true"></span>
       <div id="panel" class="glass no-drag">
         <div id="messages"></div>
 
+        <div id="response-actions" class="hidden">
+          <button type="button" id="copy-btn" class="ra-btn" title="Copy response">Copy</button>
+          <button type="button" id="retry-btn" class="ra-btn" title="Retry last action">Retry</button>
+          <button type="button" id="clear-session-btn" class="ra-btn" title="Clear session transcript">Clear session</button>
+        </div>
+
         <div id="action-row">
           <button class="act" data-mode="assist"><span class="ic"></span><span>Assist</span></button>
-          <span class="sep">•</span>
+          <span class="sep" aria-hidden="true"></span>
           <button class="act" data-mode="say"><span class="ic"></span><span>What should I say?</span></button>
-          <span class="sep">•</span>
-          <button class="act" data-mode="followup"><span class="ic"></span><span>Follow-up questions</span></button>
-          <span class="sep">•</span>
+          <span class="sep" aria-hidden="true"></span>
+          <button class="act" data-mode="followup"><span class="ic"></span><span>Follow-ups</span></button>
+          <span class="sep" aria-hidden="true"></span>
           <button class="act" data-mode="recap"><span class="ic"></span><span>Recap</span></button>
         </div>
 
         <div id="composer">
           <div id="input-area">
-            <div id="placeholder">Ask about your screen or conversation, or <span class="keycap">⌘</span><span class="keycap">⏎</span> for Assist</div>
-            <textarea id="input" rows="1" spellcheck="false"></textarea>
+            <div id="placeholder">Ask about your screen or conversation</div>
+            <textarea id="input" rows="1" spellcheck="false" aria-label="Ask Cue"></textarea>
           </div>
           <div id="composer-bottom">
-            <button id="smart-toggle" class="smart-pill"><span class="ic"></span><span>Smart</span></button>
-            <button id="more-btn" class="more-btn" title="Settings"></button>
-            <button id="zoom-out-btn" class="more-btn" title="Zoom Out" style="font-size: 18px; font-family: monospace; line-height: 1;">-</button>
-            <button id="zoom-in-btn" class="more-btn" title="Zoom In" style="font-size: 16px; font-family: monospace; line-height: 1;">+</button>
+            <button id="smart-toggle" class="smart-pill" type="button"><span class="ic"></span><span>Smart</span></button>
+            <button id="compact-toggle" class="smart-pill" type="button" title="Compact layout">Compact</button>
+            <button id="more-btn" class="more-btn" title="Settings" aria-label="Settings"></button>
+            <button id="zoom-out-btn" class="more-btn" title="Smaller text" aria-label="Zoom out">-</button>
+            <button id="zoom-in-btn" class="more-btn" title="Larger text" aria-label="Zoom in">+</button>
             <div class="spacer"></div>
-            <button id="send-btn" title="Send"></button>
+            <button id="send-btn" title="Send" aria-label="Send"></button>
           </div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Settings -->
+  <div id="transcript-drawer" class="hidden" aria-live="polite">
+    <div class="td-head">
+      <div class="td-title">Live transcript</div>
+      <div class="td-actions">
+        <button type="button" id="export-transcript" class="ra-btn">Export</button>
+        <button type="button" id="clear-transcript" class="ra-btn">Clear</button>
+        <button type="button" id="close-transcript" class="ra-btn">Close</button>
+      </div>
+    </div>
+    <div id="transcript-list"></div>
+    <div id="transcript-empty" class="td-empty">Start listening to capture You / Them turns here.</div>
+  </div>
+
   <div id="settings-scrim" class="hidden">
     <div id="settings" class="glass">
       <div class="s-head">
-        <div class="s-title">Settings</div>
-        <button id="s-close" class="s-close">Done</button>
+        <div>
+          <div class="s-title">Settings</div>
+          <div class="s-sub">Keys stay on this machine. Cue has no account and no server.</div>
+        </div>
+        <button id="s-close" class="s-close" type="button">Done</button>
       </div>
       <div class="s-body">
         <label class="s-label">Provider</label>
         <div class="s-seg" id="provider-seg">
-          <button data-provider="openai">OpenAI</button>
-          <button data-provider="anthropic">Anthropic</button>
-          <button data-provider="gemini">Gemini</button>
-          <button data-provider="nvidia">Nvidia</button>
+          <button type="button" data-provider="openai">OpenAI</button>
+          <button type="button" data-provider="anthropic">Anthropic</button>
+          <button type="button" data-provider="gemini">Gemini</button>
+          <button type="button" data-provider="nvidia">Nvidia</button>
         </div>
 
-        <label class="s-label">API keys <span class="s-hint">stored locally in cue-data.json</span></label>
+        <label class="s-label">API keys <span class="s-hint">cue-data.json</span></label>
         <div class="s-field"><span>OpenAI</span><input id="key-openai" type="password" placeholder="sk-..." autocomplete="off" /></div>
         <div class="s-field"><span>Anthropic</span><input id="key-anthropic" type="password" placeholder="sk-ant-..." autocomplete="off" /></div>
         <div class="s-field"><span>Gemini</span><input id="key-gemini" type="password" placeholder="AIza..." autocomplete="off" /></div>
         <div class="s-field"><span>Nvidia</span><input id="key-nvidia" type="password" placeholder="nvapi-..." autocomplete="off" /></div>
 
-        <label class="s-label" for="resume-context">Résumé / professional background <span class="s-hint">stored locally; sent to your selected provider with each request</span></label>
-        <textarea id="resume-context" class="s-textarea" maxlength="12000" placeholder="Paste your résumé or professional background here. cue will use it as the factual source for career-related answers."></textarea>
-        <div class="s-resume-actions"><span class="s-hint">Maximum 12,000 characters</span><button id="clear-resume" type="button">Clear résumé</button></div>
+        <label class="s-label" for="resume-context">Resume / background <span class="s-hint">optional, local only</span></label>
+        <textarea id="resume-context" class="s-textarea" maxlength="12000" placeholder="Paste resume text Cue should treat as factual background."></textarea>
+        <div class="s-resume-actions"><span class="s-hint">Max 12,000 characters</span><button id="clear-resume" type="button">Clear</button></div>
 
         <label class="s-label">Models <span class="s-hint">fast = Smart off · smart = Smart on</span></label>
         <div class="s-field"><span>Fast</span><input id="model-fast" type="text" autocomplete="off" /></div>
         <div class="s-field"><span>Smart</span><input id="model-smart" type="text" autocomplete="off" /></div>
+
+        <label class="s-label" for="opacity-range">Panel opacity</label>
+        <div class="s-opacity">
+          <input id="opacity-range" type="range" min="55" max="100" value="92" />
+          <span id="opacity-value">92%</span>
+        </div>
 
         <label class="s-label">Keyboard shortcuts</label>
         <div class="s-shortcut">
@@ -94,23 +126,23 @@
     </div>
   </div>
 
-  <!-- First-run tutorial / walkthrough -->
   <div id="onboard-scrim" class="hidden">
     <div id="onboard" class="glass">
       <div class="ob-dots" id="ob-dots"></div>
-      <div class="ob-icon" id="ob-icon"></div>
+      <div class="ob-mark" id="ob-icon" aria-hidden="true"></div>
       <div class="ob-title" id="ob-title"></div>
       <div class="ob-body" id="ob-body"></div>
       <div class="ob-buttons" id="ob-buttons"></div>
       <div class="ob-actions">
-        <button id="ob-skip" class="ob-ghost">Skip</button>
+        <button id="ob-skip" class="ob-ghost" type="button">Skip</button>
         <div class="spacer"></div>
-        <button id="ob-back" class="ob-ghost">Back</button>
-        <button id="ob-next" class="ob-primary">Next</button>
+        <button id="ob-back" class="ob-ghost" type="button">Back</button>
+        <button id="ob-next" class="ob-primary" type="button">Next</button>
       </div>
     </div>
   </div>
 
+  <script src="vendor/gsap.min.js"></script>
   <script src="icons.js"></script>
   <script src="renderer.js"></script>
 </body>

@@ -1,32 +1,35 @@
 {
   "name": "cue",
-  "version": "0.1.0",
-  "description": "Open-source macOS invisible AI overlay — three separate inputs (screen, mic, system audio) into an LLM. A Cluely-style copilot for meetings and coding problems.",
+  "version": "0.2.0",
+  "description": "Cue is a private AI overlay for meetings and code. Screen, mic, and meeting audio into your own LLM. Works on Windows and macOS.",
   "license": "GPL-3.0-or-later",
-  "author": "cue",
+  "author": "Cue",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "test": "node --test",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --mac zip",
-    "dist:win": "electron-builder --win"
+    "dist:win": "electron-builder --win nsis",
+    "dist:win:dir": "electron-builder --win --dir"
   },
   "keywords": [
     "electron",
     "overlay",
     "ai",
     "assistant",
-    "screencapturekit",
-    "macos"
+    "windows",
+    "macos",
+    "meeting-copilot"
   ],
   "devDependencies": {
-    "electron": "33.2.1",
+    "electron": "^33.2.1",
     "electron-builder": "^24.13.3"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
     "@google/genai": "^0.3.0",
+    "gsap": "^3.13.0",
     "lucide-static": "^0.468.0",
     "openai": "^4.73.0"
   }

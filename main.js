@@ -1,4 +1,4 @@
-const DEBUG = false; // Set to false to disable debug logging
+const DEBUG = false;
 const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell } = require('electron');
 const path = require('path');
 const store = require('./src/store');
@@ -8,37 +8,33 @@ const { createLLM } = require('./src/llm');
 const { MODES } = require('./src/prompts');
 const { appendResumeContext } = require('./src/profile-context');
 const { rms16 } = require('./src/wav');
+const { DEFAULT_ASSIST_SHORTCUT, validateAssistShortcut } = require('./src/shortcuts');
+const { screenPermissionMessage, isMac, isWindows } = require('./src/platform');
 
 let win = null;
 let registeredAssistShortcut = null;
+let lastFeature = null; // { mode, userText }
 
-const DEFAULT_ASSIST_SHORTCUT = 'CommandOrControl+Return';
-const RESERVED_SHORTCUTS = new Set([
-  'commandorcontrol+h',
-  'commandorcontrol+shift+x'
-]);
-
-// -------- capture / transcript state --------
 const state = { capturing: false, busy: false, transcribing: { you: false, them: false } };
-let sttDisabled = false; // set when the key can't reach any speech model (stops retry spam)
+let sttDisabled = false;
 const buffers = { you: [], them: [] };
-const transcript = []; // { channel, text, ts }
+const transcript = [];
 const FLUSH_MS = 3500;
-const MIN_BYTES = Math.floor(16000 * 2 * 0.6); // ~0.6s
+const MIN_BYTES = Math.floor(16000 * 2 * 0.6);
 const RMS_GATE = 240;
 let flushTimer = null;
 
 function send(channel, data) { if (win && !win.isDestroyed()) win.webContents.send(channel, data); }
 
-// -------- window --------
 function createWindow() {
   const { workArea } = screen.getPrimaryDisplay();
-  const W = 700, H = 600;
+  const W = 720;
+  const H = 640;
   win = new BrowserWindow({
     width: W,
     height: H,
     x: Math.round(workArea.x + (workArea.width - W) / 2),
-    y: workArea.y + 6,
+    y: workArea.y + 8,
     frame: false,
     transparent: true,
     hasShadow: false,
@@ -46,31 +42,37 @@ function createWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     fullscreenable: false,
+    thickFrame: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      backgroundThrottling: false
     }
   });
 
-  // Invisibility + overlay behavior. Set CUE_NO_PROTECT=1 to disable for debugging.
-  win.setContentProtection(!process.env.CUE_NO_PROTECT);            // excluded from screen capture (best-effort)
-  if (process.platform === 'darwin') {
+  // Best-effort exclusion from screen capture (macOS NSWindowSharingNone /
+  // Windows SetWindowDisplayAffinity WDA_EXCLUDEFROMCAPTURE).
+  win.setContentProtection(!process.env.CUE_NO_PROTECT);
+
+  if (isMac()) {
     win.setAlwaysOnTop(true, 'screen-saver', 1);
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     if (typeof win.setHiddenInMissionControl === 'function') win.setHiddenInMissionControl(true);
+  } else if (isWindows()) {
+    win.setAlwaysOnTop(true, 'screen-saver');
+    // Keep the frameless transparent window from flashing a white frame on Windows.
+    win.setBackgroundColor('#00000000');
   } else {
     win.setAlwaysOnTop(true);
   }
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-
   win.webContents.on('did-finish-load', () => win.showInactive());
   win.webContents.on('render-process-gone', (_e, d) => console.log('[cue] renderer gone', JSON.stringify(d)));
 }
 
-// -------- STT flushing --------
 async function flushChannel(channel) {
   if (state.transcribing[channel]) return;
   const chunks = buffers[channel];
@@ -78,19 +80,22 @@ async function flushChannel(channel) {
   const pcm = Buffer.concat(chunks);
   buffers[channel] = [];
   if (pcm.length < MIN_BYTES) return;
-  if (rms16(pcm) < RMS_GATE) return; // silence gate
+  if (rms16(pcm) < RMS_GATE) return;
 
   state.transcribing[channel] = true;
   try {
     const settings = store.getSettings();
     const stt = createSTT(settings);
     if (!stt.available) {
-      if (!sttDisabled) { sttDisabled = true; send('status', { message: 'No transcription key set. Add an OpenAI (Whisper) or Gemini key in Settings to enable listening. Screen/LeetCode features work without it.' }); }
+      if (!sttDisabled) {
+        sttDisabled = true;
+        send('status', { message: 'No transcription key set. Add an OpenAI (Whisper) or Gemini key in Settings to enable listening.' });
+      }
       return;
     }
     const res = await stt.transcribe(pcm);
     if (res.error) {
-      handleSttError(res.error, settings);
+      handleSttError(res.error);
       return;
     }
     if (res.text && res.text.trim()) {
@@ -106,13 +111,13 @@ async function flushChannel(channel) {
   }
 }
 
-function handleSttError(err, settings) {
+function handleSttError(err) {
   console.log('[stt] error', err.provider, err.status, err.code, err.message);
   if (sttDisabled) return;
   const noAccess = err.status === 403 || err.status === 401 || err.code === 'model_not_found';
-  sttDisabled = true; // stop hammering the API every few seconds
+  sttDisabled = true;
   if (noAccess) {
-    send('status', { message: 'Transcription off: your ' + err.provider + ' key has no access to a speech-to-text model (403). Screen + LeetCode still work. To enable listening: give the key Whisper/transcription access, or add a Gemini key in Settings and reopen.' });
+    send('status', { message: 'Transcription off: your ' + err.provider + ' key cannot reach a speech model. Screen and coding help still work. Enable Whisper access or add a Gemini key.' });
   } else {
     send('status', { message: 'Transcription error (' + err.provider + '): ' + err.message });
   }
@@ -122,69 +127,66 @@ function startFlushLoop() {
   if (flushTimer) return;
   flushTimer = setInterval(() => { flushChannel('you'); flushChannel('them'); }, FLUSH_MS);
 }
-function stopFlushLoop() { if (flushTimer) { clearInterval(flushTimer); flushTimer = null; } }
 
-// -------- capture toggle --------
-// Mic + system audio are both captured in the RENDERER (getUserMedia for the mic,
-// getDisplayMedia loopback for system audio) so they run inside cue's own process
-// and use cue's own Screen-Recording grant — no separate helper binary to authorize.
+function stopFlushLoop() {
+  if (flushTimer) { clearInterval(flushTimer); flushTimer = null; }
+}
+
 function setCapturing(active) {
   state.capturing = active;
-  if (active) {
-    startFlushLoop();
-  } else {
+  if (active) startFlushLoop();
+  else {
     stopFlushLoop();
-    buffers.you = []; buffers.them = [];
+    buffers.you = [];
+    buffers.them = [];
   }
   send('capture:state', { active });
   return active;
 }
 
-// -------- feature runner --------
+function clearTranscript() {
+  transcript.length = 0;
+  buffers.you = [];
+  buffers.them = [];
+  send('transcript:cleared', {});
+  return { ok: true };
+}
+
 async function runFeature(mode, userText) {
   if (DEBUG) console.log('[DEBUG MAIN] runFeature called:', { mode, userText, isBusy: state.busy });
   if (state.busy) return;
   const def = MODES[mode];
-  if (!def) {
-    if (DEBUG) console.log('[DEBUG MAIN] mode not found:', mode);
-    return;
-  }
+  if (!def) return;
   state.busy = true;
+  lastFeature = { mode, userText: userText || '' };
   try {
     const settings = store.getSettings();
     const llm = createLLM(settings);
     const userBubble = def.userBubble !== null ? def.userBubble : (mode === 'ask' ? userText : null);
-    if (DEBUG) console.log('[DEBUG MAIN] LLM settings loaded:', { provider: settings.provider, smart: settings.smart });
     send('llm:start', { userBubble, small: !!def.small });
 
     if (!llm.ready) {
-      if (DEBUG) console.log('[DEBUG MAIN] LLM not ready (missing key or model).');
-      send('llm:error', { message: 'Add your ' + settings.provider + ' API key in Settings (gear icon) to start. Model: ' + (llm.model || 'unset') + '.' });
+      send('llm:error', { message: 'Add your ' + settings.provider + ' API key in Settings to start. Model: ' + (llm.model || 'unset') + '.' });
       return;
     }
 
     let imageDataUrl = null;
     if (def.needsScreen) {
-      if (DEBUG) console.log('[DEBUG MAIN] Feature needs screen. Capturing screenshot...');
-      try { 
-        imageDataUrl = await captureScreenshot(); 
-        if (DEBUG) console.log('[DEBUG MAIN] Screenshot captured successfully (length:', imageDataUrl.length, ')');
-      }
-      catch (e) { 
+      try {
+        imageDataUrl = await captureScreenshot();
+      } catch (e) {
         if (DEBUG) console.error('[DEBUG MAIN] Screenshot capture failed:', e);
-        send('status', { message: 'Screen capture needs permission — grant Screen Recording to cue in System Settings.' }); 
+        send('status', { message: screenPermissionMessage() });
       }
     }
 
     const built = def.build({ transcript, userText: userText || '' });
-    if (DEBUG) console.log('[DEBUG MAIN] Built prompt. Starting LLM stream...');
-    const fullText = await llm.stream({
+    await llm.stream({
       system: appendResumeContext(def.system, settings.resumeContext),
       turns: [{ role: 'user', text: built }],
       imageDataUrl,
       onToken: (t) => send('llm:token', { text: t })
     });
-    if (DEBUG) console.log('[DEBUG MAIN] Full LLM Output:\n', fullText);
     send('llm:done', {});
   } catch (e) {
     send('llm:error', { message: 'Error: ' + (e && e.message ? e.message : String(e)) });
@@ -193,12 +195,18 @@ async function runFeature(mode, userText) {
   }
 }
 
-// -------- IPC --------
 ipcMain.handle('settings:get', () => store.getSettings());
 ipcMain.handle('settings:set', (_e, patch) => { sttDisabled = false; return store.setSettings(patch); });
 ipcMain.handle('shortcut:assist:set', (_e, accelerator) => setAssistShortcut(accelerator));
 ipcMain.handle('capture:toggle', () => setCapturing(!state.capturing));
 ipcMain.handle('capture:state', () => ({ active: state.capturing }));
+ipcMain.handle('transcript:get', () => transcript.slice());
+ipcMain.handle('transcript:clear', () => clearTranscript());
+ipcMain.handle('feature:retry', () => {
+  if (!lastFeature) return { ok: false, error: 'Nothing to retry yet.' };
+  runFeature(lastFeature.mode, lastFeature.userText);
+  return { ok: true, ...lastFeature };
+});
 ipcMain.on('ask', (_e, payload) => runFeature(payload.mode, payload.text));
 ipcMain.on('mic:pcm', (_e, arrayBuffer) => { if (state.capturing) buffers.you.push(Buffer.from(arrayBuffer)); });
 ipcMain.on('system:pcm', (_e, arrayBuffer) => { if (state.capturing) buffers.them.push(Buffer.from(arrayBuffer)); });
@@ -206,18 +214,11 @@ ipcMain.on('mouse:ignore', (_e, v) => { if (win) win.setIgnoreMouseEvents(!!v, {
 ipcMain.on('open-pane', (_e, url) => { shell.openExternal(url).catch(() => {}); });
 ipcMain.on('log', (_e, msg) => console.log('[renderer]', msg));
 
-// -------- shortcuts --------
-function normalizeShortcut(accelerator) {
-  return typeof accelerator === 'string' ? accelerator.trim().replace(/\s+/g, '') : '';
-}
-
 function registerAssistShortcut(accelerator) {
-  const next = normalizeShortcut(accelerator) || DEFAULT_ASSIST_SHORTCUT;
-  if (next.length > 80) return { ok: false, error: 'That shortcut is too long.' };
-  if (RESERVED_SHORTCUTS.has(next.toLowerCase())) {
-    return { ok: false, error: 'That shortcut is reserved by another cue action.' };
-  }
+  const checked = validateAssistShortcut(accelerator);
+  if (!checked.ok) return checked;
 
+  const next = checked.accelerator;
   const previous = registeredAssistShortcut;
   if (previous) globalShortcut.unregister(previous);
 
@@ -255,16 +256,18 @@ function registerShortcuts() {
   }
 }
 
-// -------- lifecycle --------
 app.whenReady().then(() => {
   if (app.dock) app.dock.hide();
 
-  const allowMedia = (permission) => permission === 'media' || permission === 'microphone' || permission === 'audioCapture' || permission === 'display-capture';
+  const allowMedia = (permission) =>
+    permission === 'media' ||
+    permission === 'microphone' ||
+    permission === 'audioCapture' ||
+    permission === 'display-capture';
+
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(allowMedia(permission)));
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowMedia(permission));
 
-  // System-audio loopback for getDisplayMedia: hand back a screen source with 'loopback'
-  // audio so the renderer can capture what's playing (Zoom/Meet) using cue's own grant.
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
       if (sources.length) callback({ video: sources[0], audio: 'loopback' });
@@ -275,7 +278,9 @@ app.whenReady().then(() => {
   createWindow();
   registerShortcuts();
 
-  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
 });
 
 app.on('will-quit', () => { globalShortcut.unregisterAll(); });
