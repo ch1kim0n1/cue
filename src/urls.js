@@ -14,6 +14,7 @@ const ALLOWED_HOST_SUFFIXES = [
   'aistudio.google.com',
   'ai.google.dev',
   'nvidia.com',
+  'gumroad.com',
   'github.com',
   'api.github.com'
 ];

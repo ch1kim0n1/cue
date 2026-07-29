@@ -16,12 +16,17 @@ signtool verify /pa .\dist\Cue-*-win-x64.exe
 
 ## Windows SmartScreen reputation
 
-A brand-new Authenticode certificate has little or no SmartScreen reputation. Expect warnings until enough signed installs accumulate.
+A brand-new Authenticode certificate has little or no SmartScreen reputation. Expect warnings for the first ~1000 downloads while reputation builds.
 
 - Sign every public release with the **same** subject/issuer.
 - Prefer frequent, consistent releases over one-off certs.
-- If budget allows, an **EV code-signing certificate** gives immediate reputation.
+- An **EV code-signing certificate** (~$300/year) bypasses the reputation period for immediate trust.
+- Track reputation via Windows Defender Security Center / SmartScreen feedback after publishing signed builds.
 - Document any SmartScreen false positives in the release notes.
+
+## Empirical verification (manual)
+
+See [wave4-verification.md](wave4-verification.md) for crashReporter dumps, safeStorage DPAPI, NVDA/VoiceOver, contrast, and Tab-order checklists.
 
 ## Clean install
 

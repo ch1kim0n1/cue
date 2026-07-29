@@ -77,3 +77,8 @@ jobs:
         run: npm run test:e2e
         env:
           CUE_NO_PROTECT: "1"
+
+      - name: Pack and run packaged asar e2e
+        run: npm run test:e2e:packed
+        env:
+          CUE_NO_PROTECT: "1"

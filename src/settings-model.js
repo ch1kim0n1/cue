@@ -22,7 +22,14 @@ const DEFAULTS = {
     anthropic: { fast: 'claude-3-5-haiku-latest', smart: 'claude-3-5-sonnet-latest' },
     gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
     nvidia: { fast: 'meta/llama-3.2-11b-vision-instruct', smart: 'meta/llama-3.2-90b-vision-instruct' }
-  }
+  },
+  audioDeviceId: '',
+  openAtLogin: false,
+  betaUpdates: false,
+  lifetimeSpend: 0,
+  recentFeatures: [],
+  language: 'en',
+  licenseKey: ''
 };
 
 function deepMerge(base, over) {
@@ -40,7 +47,8 @@ function deepMerge(base, over) {
 function clampOpacity(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return DEFAULTS.opacity;
-  return Math.min(1, Math.max(0.55, n));
+  // Floor raised for WCAG AA readability over glass at low opacity.
+  return Math.min(1, Math.max(0.7, n));
 }
 
 function migrateSettings(raw) {

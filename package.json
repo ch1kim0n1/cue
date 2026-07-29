@@ -1,6 +1,6 @@
 {
   "name": "cue",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Cue is a private AI overlay for meetings and code. Screen, mic, and meeting audio into your own LLM. Works on Windows and macOS.",
   "license": "GPL-3.0-or-later",
   "author": "Cue",
@@ -13,8 +13,9 @@
     "test": "node --test test/**/*.test.js test/smoke-main.js",
     "test:smoke": "node test/smoke-main.js",
     "test:e2e": "playwright test",
-    "lint": "eslint main.js preload.js src renderer scripts test e2e --max-warnings 55",
+    "lint": "eslint main.js preload.js src renderer scripts test e2e --max-warnings 50",
     "pack": "electron-builder --dir",
+    "test:e2e:packed": "node scripts/e2e-packed.js",
     "dist": "electron-builder --mac zip",
     "dist:win": "electron-builder --win nsis",
     "dist:win:dir": "electron-builder --win --dir",

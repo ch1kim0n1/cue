@@ -21,6 +21,8 @@ const { providerLabel, looksLikeKey } = require('./src/secrets');
 const { createLogger } = require('./src/logger');
 const { hasProviderKey, needsPrivacyAck, PRIVACY_NOTICE_VERSION } = require('./src/settings-model');
 const { contentProtectionWarning, screenshotFailureMessage } = require('./src/capabilities');
+const { estimateCallCost, formatUsd } = require('./src/pricing');
+require('./src/types');
 
 const FEATURE_TIMEOUT_MS = 45000;
 const STT_TIMEOUT_MS = 30000;
@@ -28,6 +30,7 @@ const FEATURE_COOLDOWN_MS = 400;
 const CONNECT_TIMEOUT_MS = 2000;
 const MAX_BUFFER_BYTES = 16000 * 2 * 30;
 const MAX_TRANSCRIPT_TURNS = 500;
+const MAX_RECENT_FEATURES = 10;
 const MEMORY_WARN_PERCENT = 8;
 const FLUSH_MS = 3500;
 const MIN_BYTES = Math.floor(16000 * 2 * 0.6);
@@ -49,6 +52,8 @@ let memoryTimer = null;
 let pendingUpdate = null;
 let autoUpdaterRef = null;
 let boundsSaveTimer = null;
+let featureAbort = null;
+let sessionSpend = 0;
 
 const state = { capturing: false, busy: false, transcribing: { you: false, them: false }, offline: false };
 let sttDisabled = false;
@@ -391,7 +396,13 @@ async function runFeature(mode, userText) {
   state.busy = true;
   lastFeatureAt = now;
   lastFeature = { mode, userText: userText || '' };
+  if (featureAbort) {
+    try { featureAbort.abort(); } catch { /* ignore */ }
+  }
+  featureAbort = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const signal = featureAbort && featureAbort.signal;
   let imageDataUrl = null;
+  let fullText = '';
   try {
     const settings = store.getSettings();
     const llm = createLLM(settings);
@@ -438,13 +449,38 @@ async function runFeature(mode, userText) {
     }
 
     const built = def.build({ transcript, userText: userText || '' });
-    await withTimeout(llm.stream({
-      system: appendResumeContext(def.system, settings.resumeContext),
+    const system = appendResumeContext(def.system, settings.resumeContext);
+    fullText = await withTimeout(llm.stream({
+      system,
       turns: [{ role: 'user', text: built }],
       imageDataUrl,
       maxTokens: def.maxTokens || 4096,
+      signal,
       onToken: (t) => send('llm:token', { text: t })
     }), FEATURE_TIMEOUT_MS, 'Model response');
+
+    const cost = estimateCallCost({
+      model: llm.model,
+      inputText: system + '\n' + built,
+      outputText: fullText,
+      hasImage: !!imageDataUrl
+    });
+    sessionSpend += cost.usd;
+    const lifetime = Number(settings.lifetimeSpend) || 0;
+    const recent = Array.isArray(settings.recentFeatures) ? settings.recentFeatures.slice() : [];
+    recent.unshift({ mode, userText: userText || '', at: Date.now() });
+    while (recent.length > MAX_RECENT_FEATURES) recent.pop();
+    store.setSettings({
+      lifetimeSpend: lifetime + cost.usd,
+      recentFeatures: recent
+    });
+    send('llm:cost', {
+      usd: cost.usd,
+      label: formatUsd(cost.usd),
+      sessionSpend,
+      lifetimeSpend: lifetime + cost.usd
+    });
+
     if (llm.usedFallback && llm.fallbackModel) {
       send('status', {
         message: 'Model unavailable; used fallback ' + llm.fallbackModel + '. Update Models in Settings.'
@@ -452,6 +488,10 @@ async function runFeature(mode, userText) {
     }
     send('llm:done', {});
   } catch (e) {
+    if (e && (e.name === 'AbortError' || e.code === 'ABORT_ERR' || /cancelled|aborted/i.test(String(e.message || '')))) {
+      send('llm:error', { message: 'Cancelled.', kind: 'cancel' });
+      return;
+    }
     const settings = store.getSettings();
     lastError = friendlyProviderError(e, settings.provider);
     log.error('feature failed', mode, e && e.message);
@@ -467,8 +507,16 @@ async function runFeature(mode, userText) {
     if (kind === 'network') send('status', { message: lastError, kind: 'network' });
   } finally {
     imageDataUrl = null;
+    featureAbort = null;
     state.busy = false;
   }
+}
+
+function cancelFeature() {
+  if (featureAbort) {
+    try { featureAbort.abort(); } catch { /* ignore */ }
+  }
+  return { ok: true, busy: state.busy };
 }
 
 async function testProviderConnection(provider) {
@@ -516,8 +564,12 @@ async function testProviderConnection(provider) {
 function diagnostics() {
   const settings = store.getSettings();
   let memory = null;
+  let cpu = null;
   try {
     if (typeof process.getSystemMemoryInfo === 'function') memory = process.getSystemMemoryInfo();
+  } catch { /* ignore */ }
+  try {
+    if (typeof process.getCPUUsage === 'function') cpu = process.getCPUUsage();
   } catch { /* ignore */ }
   return {
     version: app.getVersion(),
@@ -538,13 +590,23 @@ function diagnostics() {
     logPath: path.join(app.getPath('userData'), 'cue.log'),
     pendingUpdate: pendingUpdate,
     memory,
+    cpu,
+    sessionSpend,
+    lifetimeSpend: Number(settings.lifetimeSpend) || 0,
     privacyNoticeVersion: PRIVACY_NOTICE_VERSION
   };
 }
 
 function setupAutoUpdater() {
   if (!app.isPackaged) {
-    log.info('auto-update skipped (dev)');
+    log.info('auto-update skipped (dev); checking GitHub latest');
+    setTimeout(() => {
+      checkLatestRelease().then((info) => {
+        if (info && info.ok && info.newer) {
+          send('status', { message: 'Cue ' + info.latest + ' is available — download from GitHub Releases.' });
+        }
+      }).catch(() => {});
+    }, 2500);
     return;
   }
   try {
@@ -552,6 +614,8 @@ function setupAutoUpdater() {
     autoUpdaterRef = autoUpdater;
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = true;
+    const settings = store.getSettings();
+    autoUpdater.allowPrerelease = !!settings.betaUpdates;
     autoUpdater.on('error', (err) => log.warn('updater error', err && err.message));
     autoUpdater.on('update-available', (info) => {
       pendingUpdate = { version: info && info.version, state: 'available' };
@@ -569,6 +633,28 @@ function setupAutoUpdater() {
   }
 }
 
+function applySecurityHeaders() {
+  try {
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      const headers = { ...(details.responseHeaders || {}) };
+      headers['X-Content-Type-Options'] = ['nosniff'];
+      headers['X-Frame-Options'] = ['DENY'];
+      headers['Referrer-Policy'] = ['no-referrer'];
+      callback({ responseHeaders: headers });
+    });
+  } catch (e) {
+    log.warn('security headers unavailable', e && e.message);
+  }
+}
+
+function applyLoginItem(enabled) {
+  try {
+    app.setLoginItemSettings({ openAtLogin: !!enabled, openAsHidden: true });
+  } catch (e) {
+    log.warn('setLoginItemSettings failed', e && e.message);
+  }
+}
+
 function checkLatestRelease() {
   return new Promise((resolve) => {
     const req = https.request({
@@ -583,11 +669,16 @@ function checkLatestRelease() {
       res.on('end', () => {
         try {
           const json = JSON.parse(body);
+          const tag = String(json.tag_name || '').replace(/^v/i, '');
+          const current = app.getVersion();
+          const newer = !!(tag && tag !== current && tag.localeCompare(current, undefined, { numeric: true, sensitivity: 'base' }) > 0);
           resolve({
             ok: true,
             tag: json.tag_name || null,
+            latest: tag || null,
+            newer,
             url: json.html_url || 'https://github.com/ch1kim0n1/cue/releases',
-            current: app.getVersion()
+            current
           });
         } catch (e) {
           resolve({ ok: false, error: 'Could not parse GitHub release response.' });
@@ -615,12 +706,19 @@ if (gotLock) {
   ipcMain.handle('settings:set', (_e, patch) => {
     sttDisabled = false;
     const next = store.setSettings(patch);
+    if (patch && Object.prototype.hasOwnProperty.call(patch, 'openAtLogin')) {
+      applyLoginItem(next.openAtLogin);
+    }
+    if (patch && Object.prototype.hasOwnProperty.call(patch, 'betaUpdates') && autoUpdaterRef) {
+      autoUpdaterRef.allowPrerelease = !!next.betaUpdates;
+    }
     if (next._saveError) send('status', { message: 'Could not save settings: ' + next._saveError });
     return next;
   });
   /** @returns {{ ok: boolean, error?: string }} */
   ipcMain.handle('settings:wipe', () => {
     clearTranscript();
+    sessionSpend = 0;
     const result = store.wipeUserData();
     sttDisabled = false;
     lastFeature = null;
@@ -630,35 +728,60 @@ if (gotLock) {
   ipcMain.handle('settings:needs-privacy-ack', () => needsPrivacyAck(store.getSettings()));
   /** @returns {number} */
   ipcMain.handle('settings:privacy-version', () => PRIVACY_NOTICE_VERSION);
+  /**
+   * @param {Electron.IpcMainInvokeEvent} _e
+   * @param {string} accelerator
+   * @returns {{ ok: boolean, accelerator?: string, error?: string }}
+   */
   ipcMain.handle('shortcut:assist:set', (_e, accelerator) => setAssistShortcut(accelerator));
+  /** @returns {boolean} */
   ipcMain.handle('capture:toggle', () => setCapturing(!state.capturing));
+  /** @returns {{ active: boolean }} */
   ipcMain.handle('capture:state', () => ({ active: state.capturing }));
+  /** @returns {{ microphone: string, screen: string, platform: string }} */
   ipcMain.handle('capture:permissions', () => mediaAccessStatus());
+  /** @returns {import('./src/types').TranscriptTurn[]} */
   ipcMain.handle('transcript:get', () => transcript.slice());
+  /** @returns {{ ok: boolean }} */
   ipcMain.handle('transcript:clear', () => clearTranscript());
+  /** @returns {object} */
   ipcMain.handle('diagnostics:get', () => diagnostics());
+  /**
+   * @param {Electron.IpcMainInvokeEvent} _e
+   * @param {string} provider
+   * @returns {Promise<{ ok: boolean, message?: string, error?: string }>}
+   */
   ipcMain.handle('provider:test', (_e, provider) => testProviderConnection(provider));
+  /**
+   * @param {Electron.IpcMainInvokeEvent} _e
+   * @param {{ provider: string, value: string }} payload
+   * @returns {{ ok: boolean, hint?: string, empty?: boolean }}
+   */
   ipcMain.handle('provider:validate-key', (_e, payload) => {
     const provider = payload && payload.provider;
     const value = payload && payload.value;
     return looksLikeKey(provider, value);
   });
+  /** @returns {{ dataPath: string, userData: string, logPath: string, crashDumps: string }} */
   ipcMain.handle('app:paths', () => ({
     dataPath: store.dataPath(),
     userData: app.getPath('userData'),
     logPath: path.join(app.getPath('userData'), 'cue.log'),
     crashDumps: app.getPath('crashDumps')
   }));
+  /** @returns {Promise<{ ok: boolean, error?: string|null }>} */
   ipcMain.handle('app:open-log', async () => {
     const logPath = path.join(app.getPath('userData'), 'cue.log');
     const err = await shell.openPath(logPath);
     return { ok: !err, error: err || null };
   });
+  /** @returns {Promise<{ ok: boolean, error?: string|null }>} */
   ipcMain.handle('app:open-crash-dumps', async () => {
     const dir = app.getPath('crashDumps');
     const err = await shell.openPath(dir);
     return { ok: !err, error: err || null };
   });
+  /** @returns {Promise<{ ok: boolean, error?: string }>} */
   ipcMain.handle('update:download', async () => {
     if (!autoUpdaterRef) return { ok: false, error: 'Updater unavailable in this build.' };
     try {
@@ -668,25 +791,53 @@ if (gotLock) {
       return { ok: false, error: e && e.message };
     }
   });
+  /** @returns {{ ok: boolean }} */
   ipcMain.handle('update:defer', () => {
     pendingUpdate = pendingUpdate ? { ...pendingUpdate, state: 'deferred' } : null;
     return { ok: true };
   });
+  /** @returns {{ ok: boolean, error?: string }} */
   ipcMain.handle('update:install', () => {
     if (!autoUpdaterRef) return { ok: false, error: 'Updater unavailable.' };
     setImmediate(() => autoUpdaterRef.quitAndInstall());
     return { ok: true };
   });
+  /** @returns {Promise<object>} */
   ipcMain.handle('update:check-latest', () => checkLatestRelease());
+  /** @returns {{ ok: boolean, error?: string, mode?: string, userText?: string }} */
   ipcMain.handle('feature:retry', () => {
     if (!lastFeature) return { ok: false, error: 'Nothing to retry yet.' };
     runFeature(lastFeature.mode, lastFeature.userText);
     return { ok: true, ...lastFeature };
   });
+  /** @returns {{ ok: boolean, busy: boolean }} */
+  ipcMain.handle('feature:cancel', () => cancelFeature());
+  /**
+   * @param {Electron.IpcMainInvokeEvent} _e
+   * @param {boolean} online
+   * @returns {{ online: boolean }}
+   */
   ipcMain.handle('net:set-online', (_e, online) => {
     state.offline = !online;
     send('net:status', { online: !!online });
     return { online: !!online };
+  });
+  /**
+   * @param {Electron.IpcMainInvokeEvent} _e
+   * @param {string} message
+   * @returns {{ ok: boolean }}
+   */
+  ipcMain.handle('csp:report', (_e, message) => {
+    log.warn('CSP violation', typeof message === 'string' ? message.slice(0, 500) : message);
+    return { ok: true };
+  });
+  /** @returns {{ openAtLogin: boolean }} */
+  ipcMain.handle('app:login-item-get', () => {
+    try {
+      return app.getLoginItemSettings();
+    } catch {
+      return { openAtLogin: false };
+    }
   });
 
   ipcMain.on('ask', (_e, payload) => {
@@ -778,8 +929,11 @@ if (gotLock) {
     }
 
     attachLogFile();
+    applySecurityHeaders();
     if (app.dock) app.dock.hide();
 
+    const settings = store.getSettings();
+    applyLoginItem(!!settings.openAtLogin);
     const allowMedia = (permission) =>
       permission === 'media' ||
       permission === 'microphone' ||

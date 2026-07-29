@@ -63,6 +63,7 @@ test('packaging enables asar and multi-arch mac targets', () => {
   assert.match(cfg, /x64/);
   assert.match(cfg, /provider:\s*"github"/);
   assert.match(cfg, /deleteAppDataOnUninstall:\s*false/);
+  assert.match(cfg, /installer\.nsh/);
   assert.doesNotMatch(cfg, /certificateFile:\s*hasWinCert\s*\?\s*undefined\s*:\s*undefined/);
 });
 
@@ -71,4 +72,15 @@ test('release workflow hard-fails signature verification', () => {
   assert.match(yml, /signtool\.exe/);
   assert.match(yml, /stapler staple/);
   assert.doesNotMatch(yml, /continue-on-error:\s*true/);
+});
+
+test('wave4 surfaces cancel and security hardening', () => {
+  const main = fs.readFileSync(path.join(root, 'main.js'), 'utf8');
+  assert.match(main, /feature:cancel/);
+  assert.match(main, /X-Content-Type-Options/);
+  assert.match(main, /csp:report/);
+  assert.match(main, /MAX_LONG_EDGE|cappedThumbnailSize|estimateCallCost/);
+  const preload = fs.readFileSync(path.join(root, 'preload.js'), 'utf8');
+  assert.match(preload, /featureCancel/);
+  assert.match(preload, /reportCsp/);
 });

@@ -22,7 +22,7 @@ test('deepMerge nests objects without dropping siblings', () => {
 });
 
 test('clampOpacity keeps values inside the UI range', () => {
-  assert.equal(clampOpacity(0.2), 0.55);
+  assert.equal(clampOpacity(0.2), 0.7);
   assert.equal(clampOpacity(1.4), 1);
   assert.equal(clampOpacity('0.8'), 0.8);
   assert.equal(clampOpacity('nope'), DEFAULTS.opacity);
@@ -36,7 +36,7 @@ test('normalizeSettings fills defaults and switches provider to a keyed one', ()
     compact: 1
   });
   assert.equal(settings.provider, 'anthropic');
-  assert.equal(settings.opacity, 0.55);
+  assert.equal(settings.opacity, 0.7);
   assert.equal(settings.compact, true);
   assert.equal(settings.schemaVersion, SCHEMA_VERSION);
   assert.equal(settings.models.openai.fast, DEFAULTS.models.openai.fast);

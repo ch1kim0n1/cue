@@ -1,5 +1,5 @@
 // LLM factory — OpenAI / Anthropic / Gemini behind one streaming interface.
-// stream({ system, turns:[{role,text}], imageDataUrl, maxTokens, onToken }) -> Promise<fullText>
+// stream({ system, turns, imageDataUrl, maxTokens, onToken, signal }) -> Promise<fullText>
 const { withRetry } = require('./retry');
 
 function stripDataUrl(dataUrl) {
@@ -7,7 +7,16 @@ function stripDataUrl(dataUrl) {
   return m ? { mime: m[1], b64: m[2] } : null;
 }
 
-async function streamOpenAI({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, baseURL }) {
+function throwIfAborted(signal) {
+  if (signal && signal.aborted) {
+    const err = new Error('Request cancelled');
+    err.name = 'AbortError';
+    err.code = 'ABORT_ERR';
+    throw err;
+  }
+}
+
+async function streamOpenAI({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, baseURL, signal }) {
   const OpenAI = require('openai');
   const client = new OpenAI({ apiKey, baseURL });
   const messages = [{ role: 'system', content: system }];
@@ -27,14 +36,16 @@ async function streamOpenAI({ apiKey, model, system, turns, imageDataUrl, maxTok
   });
 
   return withRetry(async () => {
+    throwIfAborted(signal);
     const stream = await client.chat.completions.create({
       model,
       messages,
       stream: true,
       max_tokens: maxTokens
-    });
+    }, { signal });
     let full = '';
     for await (const part of stream) {
+      throwIfAborted(signal);
       const d = part.choices && part.choices[0] && part.choices[0].delta && part.choices[0].delta.content;
       if (d) { full += d; onToken(d); }
     }
@@ -42,7 +53,7 @@ async function streamOpenAI({ apiKey, model, system, turns, imageDataUrl, maxTok
   });
 }
 
-async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, signal }) {
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey });
   const messages = turns.map((t, i) => {
@@ -58,15 +69,17 @@ async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, max
   });
 
   return withRetry(async () => {
+    throwIfAborted(signal);
     const stream = await client.messages.create({
       model,
       max_tokens: maxTokens,
       system,
       messages,
       stream: true
-    });
+    }, { signal });
     let full = '';
     for await (const ev of stream) {
+      throwIfAborted(signal);
       if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') {
         full += ev.delta.text;
         onToken(ev.delta.text);
@@ -76,7 +89,7 @@ async function streamAnthropic({ apiKey, model, system, turns, imageDataUrl, max
   });
 }
 
-async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken }) {
+async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTokens, onToken, signal }) {
   const { GoogleGenAI } = require('@google/genai');
   const ai = new GoogleGenAI({ apiKey });
   const contents = turns.map((t, i) => {
@@ -90,13 +103,15 @@ async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTok
   });
 
   return withRetry(async () => {
+    throwIfAborted(signal);
     const stream = await ai.models.generateContentStream({
       model,
       contents,
-      config: { systemInstruction: system, maxOutputTokens: maxTokens }
+      config: { systemInstruction: system, maxOutputTokens: maxTokens, abortSignal: signal }
     });
     let full = '';
     for await (const chunk of stream) {
+      throwIfAborted(signal);
       const t = chunk && chunk.text;
       if (t) { full += t; onToken(t); }
     }
@@ -148,6 +163,7 @@ function createLLM(settings) {
       try {
         return await run(model);
       } catch (err) {
+        if (err && (err.name === 'AbortError' || err.code === 'ABORT_ERR')) throw err;
         const fallback = (FALLBACK_MODELS[provider] || {})[tier];
         if (fallback && fallback !== model && isModelMissing(err)) {
           model = fallback;

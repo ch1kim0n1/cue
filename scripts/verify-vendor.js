@@ -7,6 +7,13 @@ const root = path.join(__dirname, '..');
 const expected = JSON.parse(fs.readFileSync(path.join(__dirname, 'vendor-hashes.json'), 'utf8'));
 let failed = 0;
 
+function hashesEqual(a, b) {
+  const left = Buffer.from(String(a), 'utf8');
+  const right = Buffer.from(String(b), 'utf8');
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
 for (const [rel, hash] of Object.entries(expected)) {
   const full = path.join(root, rel);
   if (!fs.existsSync(full)) {
@@ -15,7 +22,7 @@ for (const [rel, hash] of Object.entries(expected)) {
     continue;
   }
   const actual = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
-  if (actual !== hash) {
+  if (!hashesEqual(actual, hash)) {
     console.error('hash mismatch', rel, '\n expected', hash, '\n actual  ', actual);
     failed++;
   } else {

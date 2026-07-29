@@ -34,3 +34,11 @@ We may update these terms in the repository. Continued use after an update const
 ## Contact
 
 https://github.com/ch1kim0n1/cue/issues
+
+## Purchases and refunds
+
+If you buy a Cue binary or sponsorship perk through GitHub Sponsors, Gumroad, or a similar storefront:
+
+- **Refund window:** 14 days from purchase, no questions asked, via the storefront's refund tools.
+- **Support:** open a GitHub Issue or use the in-app Report a bug / Support Cue links.
+- Cue source remains GPL-3.0-or-later; a purchase does not revoke GPL rights to the source.

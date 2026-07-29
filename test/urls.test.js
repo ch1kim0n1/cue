@@ -6,6 +6,8 @@ test('allows https docs hosts and system settings schemes', () => {
   assert.equal(isAllowedOpenUrl('https://platform.openai.com/api-keys'), true);
   assert.equal(isAllowedOpenUrl('https://console.anthropic.com'), true);
   assert.equal(isAllowedOpenUrl('https://ai.google.dev/gemini-api/terms'), true);
+  assert.equal(isAllowedOpenUrl('https://github.com/sponsors/ch1kim0n1'), true);
+  assert.equal(isAllowedOpenUrl('https://gumroad.com/l/example'), true);
   assert.equal(isAllowedOpenUrl('ms-settings:privacy-microphone'), true);
   assert.equal(isAllowedOpenUrl('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'), true);
 });

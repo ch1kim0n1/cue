@@ -35,7 +35,8 @@ Cue is a local Electron overlay. It has no Cue backend and no user accounts. The
 
 | Risk | Decision | Rationale |
 |---|---|---|
-| CSP `style-src 'unsafe-inline'` | **Accepted** for Cue 0.3.x | GSAP writes `transform` / `opacity` as element inline styles. Refactoring every tween to CSS custom properties is deferred. Mitigations that remain in force: `script-src 'self'` (no inline/eval scripts), `connect-src 'self'`, sandboxed renderer with `contextIsolation`, no Node in the renderer, and markdown escape-first rendering. |
+| CSP `style-src 'unsafe-inline'` | **Accepted** for Cue 0.3.x/0.4.x | GSAP writes `transform` / `opacity` as element inline styles. Mitigations: `script-src 'self'`, sandboxed renderer, CSP violation logging to `cue.log`, escape-first markdown. |
+| safeStorage / DPAPI user scope | **Verify on clean Windows profile** before paid launch | Expected: keys decrypt for the same Windows user after logout/login; a different user copying `cue-data.json` cannot decrypt. Procedure in [wave4-verification.md](wave4-verification.md). |
 
 ## Out of scope
 

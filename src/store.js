@@ -22,9 +22,20 @@ function setFileForTests(nextPath) {
   encryptionWarning = null;
 }
 
+/** Ensure target stays under userData (or the test-assigned FILE directory). */
+function assertStorePath(targetPath) {
+  const resolved = path.resolve(targetPath);
+  const root = path.resolve(path.dirname(FILE));
+  const ok = resolved === root || resolved.startsWith(root + path.sep);
+  if (!ok) throw new Error('Refusing path outside Cue data directory: ' + resolved);
+  return resolved;
+}
+
 function backupCorrupt(rawText) {
   try {
-    const backup = FILE.replace(/\.json$/i, '') + '.corrupt.' + Date.now() + '.json';
+    const backup = assertStorePath(FILE.replace(/\.json$/i, '') + '.corrupt.' + Date.now() + '.json');
+    // Path validated against the store directory above.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
     fs.writeFileSync(backup, rawText, { encoding: 'utf8', mode: 0o600 });
     return backup;
   } catch {
@@ -33,7 +44,9 @@ function backupCorrupt(rawText) {
 }
 
 function readDisk() {
-  const raw = fs.readFileSync(FILE, 'utf8');
+  const file = assertStorePath(FILE);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  const raw = fs.readFileSync(file, 'utf8');
   let parsed;
   try { parsed = JSON.parse(raw); }
   catch (e) {
@@ -95,8 +108,13 @@ function save() {
   lastSaveError = null;
   try {
     const payload = JSON.stringify(persistable(data), null, 2);
-    fs.writeFileSync(FILE, payload, { encoding: 'utf8', mode: 0o600 });
-    try { fs.chmodSync(FILE, 0o600); } catch { /* windows may ignore */ }
+    const file = assertStorePath(FILE);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
+    fs.writeFileSync(file, payload, { encoding: 'utf8', mode: 0o600 });
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename
+      fs.chmodSync(file, 0o600);
+    } catch { /* windows may ignore */ }
     return { ok: true };
   } catch (e) {
     lastSaveError = e && e.message ? e.message : String(e);
@@ -131,7 +149,12 @@ function setSettings(patch) {
 function wipeUserData() {
   data = normalizeSettings({});
   try {
-    if (fs.existsSync(FILE)) fs.unlinkSync(FILE);
+    const file = assertStorePath(FILE);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
+    if (fs.existsSync(file)) {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename
+      fs.unlinkSync(file);
+    }
   } catch (e) {
     log.error('wipe failed', e && e.message);
     return { ok: false, error: e && e.message };

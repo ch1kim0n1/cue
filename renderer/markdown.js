@@ -1,4 +1,5 @@
 // Safe markdown subset for Cue responses (escape-first).
+// Supports paragraphs, fenced code, lists, headings, bold, inline code, and http(s) links.
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => {
     if (c === '&') return '&amp;';
@@ -6,6 +7,28 @@ function esc(s) {
     if (c === '>') return '&gt;';
     return '&quot;';
   });
+}
+
+function safeHref(raw) {
+  try {
+    const u = new URL(String(raw || '').trim());
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.href;
+  } catch {
+    return null;
+  }
+}
+
+function inline(s) {
+  let out = esc(s);
+  out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, href) => {
+    const safe = safeHref(href);
+    if (!safe) return esc(label) + ' (' + esc(href) + ')';
+    return '<a href="' + esc(safe) + '" rel="noreferrer noopener">' + esc(label) + '</a>';
+  });
+  return out;
 }
 
 function renderMarkdown(text) {
@@ -17,9 +40,6 @@ function renderMarkdown(text) {
   const flushP = () => {
     if (buf.length) { html += '<p>' + inline(buf.join(' ')) + '</p>'; buf = []; }
   };
-  const inline = (s) => esc(s)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   for (const raw of lines) {
     const line = raw;
     if (/^```/.test(line.trim())) {
@@ -35,6 +55,14 @@ function renderMarkdown(text) {
       continue;
     }
     if (inCode) { html += esc(line) + '\n'; continue; }
+    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (heading) {
+      flushP();
+      if (inList) { html += '</ul>'; inList = false; }
+      const level = heading[1].length;
+      html += '<h' + level + '>' + inline(heading[2]) + '</h' + level + '>';
+      continue;
+    }
     if (/^\s*[-*]\s+/.test(line)) {
       flushP();
       if (!inList) { html += '<ul>'; inList = true; }
@@ -55,8 +83,8 @@ function renderMarkdown(text) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { renderMarkdown, esc };
+  module.exports = { renderMarkdown, esc, safeHref };
 }
 if (typeof window !== 'undefined') {
-  window.CUE_MARKDOWN = { renderMarkdown, esc };
+  window.CUE_MARKDOWN = { renderMarkdown, esc, safeHref };
 }

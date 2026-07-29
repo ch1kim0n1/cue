@@ -23,16 +23,23 @@
 
   let settings = null;
   let busy = false;
+  let isOnline = navigator.onLine !== false;
   let aiEl = null;
   let caretEl = null;
   let lastRawResponse = '';
   let assistShortcut = DEFAULT_ASSIST_SHORTCUT;
   let recordingShortcut = false;
+  let tokenBuf = '';
+  let tokenRaf = 0;
+  let streamStartedAt = 0;
+  let streamChars = 0;
   const localTranscript = [];
 
   const messages = $('#messages');
   const responseActions = $('#response-actions');
-
+  const cancelBtn = $('#cancel-btn');
+  const costLabel = $('#cost-label');
+  const rateLabel = $('#rate-label');
   function canAnimate() { return !!(gsap && !reduceMotion); }
 
   function animateIn(el, vars) {
@@ -60,9 +67,13 @@
   }
 
   function esc(s) {
-    return (window.CUE_MARKDOWN && window.CUE_MARKDOWN.esc)
-      ? window.CUE_MARKDOWN.esc(s)
-      : String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    if (window.CUE_MARKDOWN && window.CUE_MARKDOWN.esc) return window.CUE_MARKDOWN.esc(s);
+    return String(s).replace(/[&<>"]/g, (c) => {
+      if (c === '&') return '&amp;';
+      if (c === '<') return '&lt;';
+      if (c === '>') return '&gt;';
+      return '&quot;';
+    });
   }
 
   function renderMarkdown(text) {
@@ -123,22 +134,62 @@
     animateIn(aiEl, { y: 4, duration: 0.22 });
   }
 
+  function flushTokenBuf() {
+    tokenRaf = 0;
+    if (!tokenBuf || !aiEl) return;
+    const span = document.createElement('span');
+    span.className = 'w';
+    span.textContent = tokenBuf;
+    aiEl.insertBefore(span, caretEl);
+    tokenBuf = '';
+    if (rateLabel && streamStartedAt) {
+      const elapsed = Math.max(0.05, (Date.now() - streamStartedAt) / 1000);
+      const toks = Math.round(streamChars / 4 / elapsed);
+      rateLabel.textContent = toks + ' tok/s';
+      rateLabel.classList.remove('hidden');
+    }
+  }
+
   function appendToken(t) {
     if (!aiEl) startAi(false);
     aiEl.dataset.raw += t;
-    const span = document.createElement('span');
-    span.className = 'w';
-    span.textContent = t;
-    aiEl.insertBefore(span, caretEl);
+    tokenBuf += t;
+    streamChars += t.length;
+    if (!tokenRaf) tokenRaf = requestAnimationFrame(flushTokenBuf);
+  }
+
+  function wireCodeCopyButtons(root) {
+    if (!root) return;
+    root.querySelectorAll('pre').forEach((pre) => {
+      if (pre.querySelector('.code-copy')) return;
+      pre.classList.add('code-block');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'code-copy ra-btn';
+      btn.textContent = 'Copy';
+      btn.addEventListener('click', async () => {
+        const code = pre.querySelector('code');
+        try {
+          await navigator.clipboard.writeText(code ? code.textContent : pre.textContent);
+          btn.textContent = 'Copied';
+          setTimeout(() => { btn.textContent = 'Copy'; }, 1000);
+        } catch (_) { /* ignore */ }
+      });
+      pre.appendChild(btn);
+    });
   }
 
   function finalizeAi() {
+    if (tokenRaf) { cancelAnimationFrame(tokenRaf); flushTokenBuf(); }
     if (!aiEl) return;
     const raw = aiEl.dataset.raw || '';
     lastRawResponse = raw;
     aiEl.innerHTML = renderMarkdown(raw);
+    wireCodeCopyButtons(aiEl);
     aiEl = null;
     caretEl = null;
+    if (cancelBtn) cancelBtn.classList.add('hidden');
+    if (rateLabel) rateLabel.classList.add('hidden');
     responseActions.classList.remove('hidden');
     animateIn(responseActions, { y: 4, duration: 0.24 });
   }
@@ -146,10 +197,15 @@
   function setBusy(v) {
     busy = v;
     $('#send-btn').classList.toggle('busy', v);
+    if (cancelBtn) cancelBtn.classList.toggle('hidden', !v);
+    if (v) {
+      responseActions.classList.remove('hidden');
+      if (costLabel) costLabel.classList.add('hidden');
+    }
   }
 
   function applyOpacity(value) {
-    const opacity = Math.min(1, Math.max(0.55, Number(value) || 0.92));
+    const opacity = Math.min(1, Math.max(0.7, Number(value) || 0.92));
     document.documentElement.style.setProperty('--panel-opacity', String(opacity));
     const range = $('#opacity-range');
     const label = $('#opacity-value');
@@ -165,7 +221,7 @@
 
   function runMode(mode, text) {
     if (busy) return;
-    if (!navigator.onLine) {
+    if (!isOnline) {
       showStatus('Cue is offline. Reconnect to use Assist and other AI features.', 'network');
       return;
     }
@@ -261,7 +317,7 @@
   $('#stop-btn').addEventListener('click', async () => {
     const turningOn = !$('#stop-btn').classList.contains('active');
     if (turningOn) {
-      if (!navigator.onLine) {
+      if (!isOnline) {
         showStatus('Cue is offline. Listening needs a network connection.', 'network');
         return;
       }
@@ -306,6 +362,13 @@
     if (!result.ok) showStatus(result.error || 'Nothing to retry yet.');
   });
 
+  if (cancelBtn) {
+    cancelBtn.addEventListener('click', async () => {
+      await cue.featureCancel();
+      showStatus('Cancelling…');
+    });
+  }
+
   $('#clear-session-btn').addEventListener('click', async () => {
     await cue.transcriptClear();
     localTranscript.length = 0;
@@ -318,9 +381,9 @@
   async function startMic() {
     if (micStream) return;
     try {
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
-      });
+      const audio = { echoCancellation: true, noiseSuppression: true, channelCount: 1 };
+      if (settings && settings.audioDeviceId) audio.deviceId = { exact: settings.audioDeviceId };
+      micStream = await navigator.mediaDevices.getUserMedia({ audio });
       audioCtx = new AudioContext({ sampleRate: 16000 });
       await audioCtx.audioWorklet.addModule('./pcm-processor.js');
       micNode = audioCtx.createMediaStreamSource(micStream);
@@ -404,12 +467,21 @@
 
   cue.on('llm:start', ({ userBubble, small }) => {
     clearMessages();
+    tokenBuf = '';
+    streamChars = 0;
+    streamStartedAt = Date.now();
     if (userBubble) addUserBubble(userBubble);
     startAi(!!small);
     setBusy(true);
   });
   cue.on('llm:token', ({ text }) => appendToken(text));
   cue.on('llm:done', () => { finalizeAi(); setBusy(false); });
+  cue.on('llm:cost', (info) => {
+    if (costLabel && info && info.label) {
+      costLabel.textContent = info.label;
+      costLabel.classList.remove('hidden');
+    }
+  });
   cue.on('llm:error', ({ message }) => {
     if (!aiEl) startAi(true);
     aiEl.dataset.raw = message;
@@ -435,6 +507,7 @@
     stopSystemAudio();
   });
   cue.on('net:status', ({ online }) => {
+    isOnline = !!online;
     document.body.classList.toggle('is-offline', !online);
     const stop = $('#stop-btn');
     if (stop) stop.disabled = !online && !stop.classList.contains('active');
@@ -456,9 +529,23 @@
     $('#update-install').classList.remove('hidden');
   });
 
-  window.addEventListener('online', () => cue.netSetOnline(true));
-  window.addEventListener('offline', () => cue.netSetOnline(false));
-  cue.netSetOnline(navigator.onLine);
+  async function setOnline(online) {
+    isOnline = !!online;
+    document.body.classList.toggle('is-offline', !isOnline);
+    const stop = $('#stop-btn');
+    if (stop) stop.disabled = !isOnline && !stop.classList.contains('active');
+    document.querySelectorAll('.act, #send-btn').forEach((el) => { el.disabled = !isOnline; });
+    await cue.netSetOnline(isOnline);
+  }
+  window.addEventListener('online', () => { setOnline(true); });
+  window.addEventListener('offline', () => { setOnline(false); });
+  setOnline(navigator.onLine);
+
+  document.addEventListener('securitypolicyviolation', (e) => {
+    const msg = (e.violatedDirective || 'csp') + ' blocked ' + (e.blockedURI || e.sourceFile || '');
+    cue.reportCsp(msg);
+    cue.log('CSP: ' + msg);
+  });
 
   function renderTranscriptList() {
     const list = $('#transcript-list');
@@ -558,9 +645,30 @@
     applyOpacity(settings.opacity);
     const consent = $('#listen-consent');
     if (consent) consent.checked = !!settings.listenConsent;
+    const openLogin = $('#open-at-login');
+    if (openLogin) openLogin.checked = !!settings.openAtLogin;
+    const beta = $('#beta-updates');
+    if (beta) beta.checked = !!settings.betaUpdates;
     syncAssistShortcutLabels();
     $('#s-status').textContent = statusText();
     refreshPathsAndDiagnostics();
+    populateAudioDevices();
+  }
+
+  async function populateAudioDevices() {
+    const sel = $('#audio-device');
+    if (!sel) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const inputs = devices.filter((d) => d.kind === 'audioinput');
+      const current = settings.audioDeviceId || '';
+      sel.innerHTML = '<option value="">System default</option>' +
+        inputs.map((d) => '<option value="' + esc(d.deviceId) + '"' +
+          (d.deviceId === current ? ' selected' : '') + '>' +
+          esc(d.label || 'Microphone') + '</option>').join('');
+    } catch (_) {
+      sel.innerHTML = '<option value="">System default</option>';
+    }
   }
 
   async function refreshPathsAndDiagnostics() {
@@ -582,6 +690,27 @@
     await cue.settingsSet({ listenConsent: settings.listenConsent });
   });
 
+  const openLoginEl = $('#open-at-login');
+  if (openLoginEl) {
+    openLoginEl.addEventListener('change', async (e) => {
+      settings.openAtLogin = !!e.target.checked;
+      await cue.settingsSet({ openAtLogin: settings.openAtLogin });
+    });
+  }
+  const betaEl = $('#beta-updates');
+  if (betaEl) {
+    betaEl.addEventListener('change', async (e) => {
+      settings.betaUpdates = !!e.target.checked;
+      await cue.settingsSet({ betaUpdates: settings.betaUpdates });
+    });
+  }
+  const audioSel = $('#audio-device');
+  if (audioSel) {
+    audioSel.addEventListener('change', async () => {
+      settings.audioDeviceId = audioSel.value || '';
+      await cue.settingsSet({ audioDeviceId: settings.audioDeviceId });
+    });
+  }
   $('#clear-keys').addEventListener('click', async () => {
     settings.apiKeys = { openai: '', anthropic: '', gemini: '', deepgram: '', nvidia: '' };
     $('#key-openai').value = '';
@@ -624,7 +753,9 @@
     const k = settings.apiKeys;
     const has = [k.openai && 'OpenAI', k.anthropic && 'Anthropic', k.gemini && 'Gemini', k.nvidia && 'Nvidia'].filter(Boolean);
     const stt = k.openai ? 'Whisper' : (k.gemini ? 'Gemini' : 'none');
-    return 'Active: ' + settings.provider + ' · keys: ' + (has.join(', ') || 'none set') + ' · transcription: ' + stt;
+    const spend = Number(settings.lifetimeSpend) || 0;
+    return 'Active: ' + settings.provider + ' · keys: ' + (has.join(', ') || 'none set') +
+      ' · transcription: ' + stt + ' · lifetime spend ≈ $' + spend.toFixed(3);
   }
 
   document.querySelectorAll('#provider-seg button').forEach((b) => b.addEventListener('click', () => {
@@ -957,6 +1088,10 @@
     showStatus(res.ok ? res.message : (res.error || 'Connection failed.'));
   });
   $('#report-bug').addEventListener('click', () => cue.openPane('https://github.com/ch1kim0n1/cue/issues'));
+  const purchaseBtn = $('#purchase-cue');
+  if (purchaseBtn) {
+    purchaseBtn.addEventListener('click', () => cue.openPane('https://github.com/sponsors/ch1kim0n1'));
+  }
   $('#check-updates').addEventListener('click', async () => {
     const res = await cue.updateCheckLatest();
     if (!res.ok) {

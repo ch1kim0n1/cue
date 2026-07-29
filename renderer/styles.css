@@ -286,6 +286,38 @@ body.compact .act { font-size: 12.5px; padding: 4px 6px; }
   color: #ffd0c4;
 }
 
+.cost-label,
+.rate-label {
+  font: 500 12px var(--mono, var(--font));
+  color: var(--tx-2);
+  align-self: center;
+  margin-left: 4px;
+}
+.cost-label.hidden,
+.rate-label.hidden { display: none; }
+
+pre.code-block {
+  position: relative;
+  padding-top: 28px;
+}
+pre.code-block .code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+}
+
+.s-select {
+  width: 100%;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--tx);
+  font: 500 13px var(--font);
+}
+
 #update-banner {
   display: flex;
   align-items: center;

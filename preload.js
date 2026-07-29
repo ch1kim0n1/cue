@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('cue', {
   settingsPrivacyVersion: () => ipcRenderer.invoke('settings:privacy-version'),
   shortcutAssistSet: (accelerator) => ipcRenderer.invoke('shortcut:assist:set', accelerator),
   ask: (payload) => ipcRenderer.send('ask', payload),
+  featureCancel: () => ipcRenderer.invoke('feature:cancel'),
   captureToggle: () => ipcRenderer.invoke('capture:toggle'),
   captureState: () => ipcRenderer.invoke('capture:state'),
   capturePermissions: () => ipcRenderer.invoke('capture:permissions'),
@@ -28,6 +29,8 @@ contextBridge.exposeInMainWorld('cue', {
   updateInstall: () => ipcRenderer.invoke('update:install'),
   updateCheckLatest: () => ipcRenderer.invoke('update:check-latest'),
   netSetOnline: (online) => ipcRenderer.invoke('net:set-online', online),
+  reportCsp: (message) => ipcRenderer.invoke('csp:report', message),
+  loginItemGet: () => ipcRenderer.invoke('app:login-item-get'),
   micPcm: (arrayBuffer) => ipcRenderer.send('mic:pcm', arrayBuffer),
   systemPcm: (arrayBuffer) => ipcRenderer.send('system:pcm', arrayBuffer),
   setIgnoreMouse: (v) => ipcRenderer.send('mouse:ignore', v),
@@ -35,7 +38,7 @@ contextBridge.exposeInMainWorld('cue', {
   log: (msg) => ipcRenderer.send('log', msg),
   on: (channel, cb) => {
     const allowed = [
-      'capture:state', 'capture:stop', 'llm:start', 'llm:token', 'llm:done', 'llm:error',
+      'capture:state', 'capture:stop', 'llm:start', 'llm:token', 'llm:done', 'llm:error', 'llm:cost',
       'status', 'transcript', 'transcript:cleared', 'update:available', 'update:downloaded',
       'settings:open', 'net:status'
     ];

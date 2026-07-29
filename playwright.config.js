@@ -8,6 +8,6 @@ module.exports = defineConfig({
   workers: 1,
   reporter: 'list',
   projects: [
-    { name: 'electron', testMatch: /electron\.ui\.spec\.js/ }
+    { name: 'electron', testMatch: /electron\.(ui|packed)\.spec\.js/ }
   ]
 });
