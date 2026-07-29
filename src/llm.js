@@ -104,12 +104,26 @@ async function streamGemini({ apiKey, model, system, turns, imageDataUrl, maxTok
   });
 }
 
+const FALLBACK_MODELS = {
+  openai: { fast: 'gpt-4o-mini', smart: 'gpt-4o' },
+  anthropic: { fast: 'claude-3-5-haiku-latest', smart: 'claude-3-5-sonnet-latest' },
+  gemini: { fast: 'gemini-2.5-flash', smart: 'gemini-2.5-pro' },
+  nvidia: { fast: 'meta/llama-3.2-11b-vision-instruct', smart: 'meta/llama-3.2-90b-vision-instruct' }
+};
+
+function isModelMissing(err) {
+  const code = err && err.code;
+  const status = err && (err.status || err.statusCode);
+  const msg = String((err && err.message) || '');
+  return code === 'model_not_found' || status === 404 || /model[_ ]?not[_ ]?found|does not exist|deprecated/i.test(msg);
+}
+
 function createLLM(settings) {
   const provider = settings.provider;
   const keys = settings.apiKeys || {};
   const apiKey = keys[provider];
   const tier = settings.smart ? 'smart' : 'fast';
-  const model = (settings.models[provider] || {})[tier];
+  let model = (settings.models[provider] || {})[tier];
   const defaultMaxTokens = 4096;
 
   return {
@@ -117,16 +131,35 @@ function createLLM(settings) {
     model,
     apiKey,
     ready: !!apiKey && !!model,
+    usedFallback: false,
+    fallbackModel: null,
     async stream(params) {
       const maxTokens = params.maxTokens || defaultMaxTokens;
-      const args = { apiKey, model, maxTokens, ...params };
-      if (provider === 'openai') return streamOpenAI(args);
-      if (provider === 'nvidia') return streamOpenAI({ ...args, baseURL: 'https://integrate.api.nvidia.com/v1' });
-      if (provider === 'anthropic') return streamAnthropic(args);
-      if (provider === 'gemini') return streamGemini(args);
-      throw new Error('unknown provider: ' + provider);
+      this.usedFallback = false;
+      this.fallbackModel = null;
+      const run = async (useModel) => {
+        const args = { apiKey, model: useModel, maxTokens, ...params };
+        if (provider === 'openai') return streamOpenAI(args);
+        if (provider === 'nvidia') return streamOpenAI({ ...args, baseURL: 'https://integrate.api.nvidia.com/v1' });
+        if (provider === 'anthropic') return streamAnthropic(args);
+        if (provider === 'gemini') return streamGemini(args);
+        throw new Error('unknown provider: ' + provider);
+      };
+      try {
+        return await run(model);
+      } catch (err) {
+        const fallback = (FALLBACK_MODELS[provider] || {})[tier];
+        if (fallback && fallback !== model && isModelMissing(err)) {
+          model = fallback;
+          this.usedFallback = true;
+          this.fallbackModel = fallback;
+          this.model = fallback;
+          return run(fallback);
+        }
+        throw err;
+      }
     }
   };
 }
 
-module.exports = { createLLM };
+module.exports = { createLLM, FALLBACK_MODELS, isModelMissing };

@@ -14,6 +14,7 @@ const DEFAULTS = {
   onboarded: false,
   privacyAck: false,
   listenConsent: false,
+  windowBounds: null,
   shortcuts: { assist: 'CommandOrControl+Return' },
   apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', nvidia: '' },
   models: {

@@ -14,7 +14,8 @@ const ALLOWED_HOST_SUFFIXES = [
   'aistudio.google.com',
   'ai.google.dev',
   'nvidia.com',
-  'github.com'
+  'github.com',
+  'api.github.com'
 ];
 
 function isAllowedOpenUrl(raw) {

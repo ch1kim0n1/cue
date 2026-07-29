@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('cue', {
   settingsGet: () => ipcRenderer.invoke('settings:get'),
   settingsSet: (patch) => ipcRenderer.invoke('settings:set', patch),
   settingsWipe: () => ipcRenderer.invoke('settings:wipe'),
+  settingsNeedsPrivacyAck: () => ipcRenderer.invoke('settings:needs-privacy-ack'),
+  settingsPrivacyVersion: () => ipcRenderer.invoke('settings:privacy-version'),
   shortcutAssistSet: (accelerator) => ipcRenderer.invoke('shortcut:assist:set', accelerator),
   ask: (payload) => ipcRenderer.send('ask', payload),
   captureToggle: () => ipcRenderer.invoke('capture:toggle'),
@@ -16,7 +18,16 @@ contextBridge.exposeInMainWorld('cue', {
   transcriptClear: () => ipcRenderer.invoke('transcript:clear'),
   featureRetry: () => ipcRenderer.invoke('feature:retry'),
   diagnosticsGet: () => ipcRenderer.invoke('diagnostics:get'),
+  providerTest: (provider) => ipcRenderer.invoke('provider:test', provider),
+  providerValidateKey: (provider, value) => ipcRenderer.invoke('provider:validate-key', { provider, value }),
   appPaths: () => ipcRenderer.invoke('app:paths'),
+  openLog: () => ipcRenderer.invoke('app:open-log'),
+  openCrashDumps: () => ipcRenderer.invoke('app:open-crash-dumps'),
+  updateDownload: () => ipcRenderer.invoke('update:download'),
+  updateDefer: () => ipcRenderer.invoke('update:defer'),
+  updateInstall: () => ipcRenderer.invoke('update:install'),
+  updateCheckLatest: () => ipcRenderer.invoke('update:check-latest'),
+  netSetOnline: (online) => ipcRenderer.invoke('net:set-online', online),
   micPcm: (arrayBuffer) => ipcRenderer.send('mic:pcm', arrayBuffer),
   systemPcm: (arrayBuffer) => ipcRenderer.send('system:pcm', arrayBuffer),
   setIgnoreMouse: (v) => ipcRenderer.send('mouse:ignore', v),
@@ -24,8 +35,9 @@ contextBridge.exposeInMainWorld('cue', {
   log: (msg) => ipcRenderer.send('log', msg),
   on: (channel, cb) => {
     const allowed = [
-      'capture:state', 'llm:start', 'llm:token', 'llm:done', 'llm:error',
-      'status', 'transcript', 'transcript:cleared'
+      'capture:state', 'capture:stop', 'llm:start', 'llm:token', 'llm:done', 'llm:error',
+      'status', 'transcript', 'transcript:cleared', 'update:available', 'update:downloaded',
+      'settings:open', 'net:status'
     ];
     if (!allowed.includes(channel)) return;
     ipcRenderer.on(channel, (_e, data) => cb(data));

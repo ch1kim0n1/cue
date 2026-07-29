@@ -60,7 +60,14 @@
   }
 
   function esc(s) {
-    return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    return (window.CUE_MARKDOWN && window.CUE_MARKDOWN.esc)
+      ? window.CUE_MARKDOWN.esc(s)
+      : String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
+  function renderMarkdown(text) {
+    if (window.CUE_MARKDOWN) return window.CUE_MARKDOWN.renderMarkdown(text);
+    return esc(text);
   }
 
   function shortcutParts(accelerator) {
@@ -88,52 +95,6 @@
       placeholder.innerHTML = 'Ask about your screen or conversation, or ' +
         shortcutKeycapsHtml(assistShortcut) + ' for Assist';
     }
-  }
-
-  function renderMarkdown(text) {
-    const lines = text.split('\n');
-    let html = '';
-    let inCode = false;
-    let inList = false;
-    let buf = [];
-    const flushP = () => {
-      if (buf.length) { html += '<p>' + inline(buf.join(' ')) + '</p>'; buf = []; }
-    };
-    const inline = (s) => esc(s)
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    for (const raw of lines) {
-      const line = raw;
-      if (/^```/.test(line.trim())) {
-        if (!inCode) {
-          flushP();
-          if (inList) { html += '</ul>'; inList = false; }
-          html += '<pre><code>';
-          inCode = true;
-        } else {
-          html += '</code></pre>';
-          inCode = false;
-        }
-        continue;
-      }
-      if (inCode) { html += esc(line) + '\n'; continue; }
-      if (/^\s*[-*]\s+/.test(line)) {
-        flushP();
-        if (!inList) { html += '<ul>'; inList = true; }
-        html += '<li>' + inline(line.replace(/^\s*[-*]\s+/, '')) + '</li>';
-        continue;
-      }
-      if (line.trim() === '') {
-        flushP();
-        if (inList) { html += '</ul>'; inList = false; }
-        continue;
-      }
-      buf.push(line.trim());
-    }
-    flushP();
-    if (inList) html += '</ul>';
-    if (inCode) html += '</code></pre>';
-    return html;
   }
 
   function clearMessages() {
@@ -204,6 +165,10 @@
 
   function runMode(mode, text) {
     if (busy) return;
+    if (!navigator.onLine) {
+      showStatus('Cue is offline. Reconnect to use Assist and other AI features.', 'network');
+      return;
+    }
     setBusy(true);
     cue.ask({ mode, text: text || '' });
   }
@@ -296,6 +261,10 @@
   $('#stop-btn').addEventListener('click', async () => {
     const turningOn = !$('#stop-btn').classList.contains('active');
     if (turningOn) {
+      if (!navigator.onLine) {
+        showStatus('Cue is offline. Listening needs a network connection.', 'network');
+        return;
+      }
       if (!settings.listenConsent) {
         showStatus('Confirm meeting-audio consent in Settings before listening.');
         openSettings();
@@ -369,9 +338,14 @@
   }
 
   function stopMic() {
-    if (micProc) { micProc.port.onmessage = null; micProc.disconnect(); micProc = null; }
-    if (micNode) { micNode.disconnect(); micNode = null; }
-    if (audioCtx) { audioCtx.close(); audioCtx = null; }
+    if (micProc) {
+      try { micProc.port.onmessage = null; } catch { /* ignore */ }
+      try { if (micProc.port && micProc.port.close) micProc.port.close(); } catch { /* ignore */ }
+      try { micProc.disconnect(); } catch { /* ignore */ }
+      micProc = null;
+    }
+    if (micNode) { try { micNode.disconnect(); } catch { /* ignore */ } micNode = null; }
+    if (audioCtx) { try { audioCtx.close(); } catch { /* ignore */ } audioCtx = null; }
     if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
   }
 
@@ -409,9 +383,14 @@
   }
 
   function stopSystemAudio() {
-    if (sysProc) { sysProc.port.onmessage = null; sysProc.disconnect(); sysProc = null; }
-    if (sysNode) { sysNode.disconnect(); sysNode = null; }
-    if (sysCtx) { sysCtx.close(); sysCtx = null; }
+    if (sysProc) {
+      try { sysProc.port.onmessage = null; } catch { /* ignore */ }
+      try { if (sysProc.port && sysProc.port.close) sysProc.port.close(); } catch { /* ignore */ }
+      try { sysProc.disconnect(); } catch { /* ignore */ }
+      sysProc = null;
+    }
+    if (sysNode) { try { sysNode.disconnect(); } catch { /* ignore */ } sysNode = null; }
+    if (sysCtx) { try { sysCtx.close(); } catch { /* ignore */ } sysCtx = null; }
     if (sysStream) { sysStream.getTracks().forEach((t) => t.stop()); sysStream = null; }
   }
 
@@ -439,21 +418,47 @@
   });
 
   let statusTimer = null;
-  function showStatus(message) {
-    let el = document.getElementById('cue-status');
-    if (!el) {
-      el = document.createElement('div');
-      el.id = 'cue-status';
-      const panel = document.getElementById('panel');
-      panel.insertBefore(el, document.getElementById('response-actions'));
-    }
+  function showStatus(message, kind) {
+    const el = document.getElementById('cue-status');
+    if (!el) return;
     el.textContent = message;
     el.classList.add('show');
+    el.classList.toggle('network', kind === 'network');
     animateIn(el, { y: 4, duration: 0.22 });
     clearTimeout(statusTimer);
-    statusTimer = setTimeout(() => el.classList.remove('show'), 11000);
+    statusTimer = setTimeout(() => el.classList.remove('show'), kind === 'network' || /key|permission|consent/i.test(message) ? 16000 : 11000);
   }
-  cue.on('status', ({ message }) => { cue.log('[status] ' + message); showStatus(message); });
+  cue.on('status', ({ message, kind }) => { cue.log('[status] ' + message); showStatus(message, kind); });
+  cue.on('settings:open', () => openSettings());
+  cue.on('capture:stop', () => {
+    stopMic();
+    stopSystemAudio();
+  });
+  cue.on('net:status', ({ online }) => {
+    document.body.classList.toggle('is-offline', !online);
+    const stop = $('#stop-btn');
+    if (stop) stop.disabled = !online && !stop.classList.contains('active');
+    document.querySelectorAll('.act, #send-btn').forEach((el) => { el.disabled = !online; });
+    if (!online) showStatus('Cue is offline. Assist and listening need a network connection.', 'network');
+  });
+  cue.on('update:available', (info) => {
+    const banner = $('#update-banner');
+    banner.classList.remove('hidden');
+    $('#update-banner-text').textContent = 'Cue ' + (info && info.version) + ' is available.';
+    $('#update-download').classList.remove('hidden');
+    $('#update-install').classList.add('hidden');
+  });
+  cue.on('update:downloaded', (info) => {
+    const banner = $('#update-banner');
+    banner.classList.remove('hidden');
+    $('#update-banner-text').textContent = 'Cue ' + (info && info.version) + ' is ready to install.';
+    $('#update-download').classList.add('hidden');
+    $('#update-install').classList.remove('hidden');
+  });
+
+  window.addEventListener('online', () => cue.netSetOnline(true));
+  window.addEventListener('offline', () => cue.netSetOnline(false));
+  cue.netSetOnline(navigator.onLine);
 
   function renderTranscriptList() {
     const list = $('#transcript-list');
@@ -632,10 +637,24 @@
   }));
 
   async function saveSettings() {
-    settings.apiKeys.openai = $('#key-openai').value.trim();
-    settings.apiKeys.anthropic = $('#key-anthropic').value.trim();
-    settings.apiKeys.gemini = $('#key-gemini').value.trim();
-    settings.apiKeys.nvidia = $('#key-nvidia').value.trim();
+    const nextKeys = {
+      openai: $('#key-openai').value.trim(),
+      anthropic: $('#key-anthropic').value.trim(),
+      gemini: $('#key-gemini').value.trim(),
+      nvidia: $('#key-nvidia').value.trim()
+    };
+    for (const provider of Object.keys(nextKeys)) {
+      if (!nextKeys[provider]) continue;
+      const check = await cue.providerValidateKey(provider, nextKeys[provider]);
+      if (check && check.ok === false && !check.empty) {
+        const proceed = window.confirm((check.hint || 'Key format looks unusual.') + ' Save anyway?');
+        if (!proceed) return;
+      }
+    }
+    settings.apiKeys.openai = nextKeys.openai;
+    settings.apiKeys.anthropic = nextKeys.anthropic;
+    settings.apiKeys.gemini = nextKeys.gemini;
+    settings.apiKeys.nvidia = nextKeys.nvidia;
     settings.resumeContext = $('#resume-context').value.trim();
     settings.listenConsent = !!($('#listen-consent') && $('#listen-consent').checked);
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
@@ -780,7 +799,7 @@
   }
   document.addEventListener('mousemove', (e) => {
     const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #transcript-drawer, #privacy-scrim'));
+    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #transcript-drawer, #privacy-scrim, #help-scrim, #update-banner'));
     setIgnore(!overUI);
   });
   setIgnore(true);
@@ -898,12 +917,79 @@
   }
 
   $('#privacy-ack').addEventListener('click', async () => {
+    const version = await cue.settingsPrivacyVersion();
     settings.privacyAck = true;
-    await cue.settingsSet({ privacyAck: true, privacyNoticeVersion: 2 });
+    await cue.settingsSet({ privacyAck: true, privacyNoticeVersion: version });
     settings = await cue.settingsGet();
     privacyScrim.classList.add('hidden');
     if (releasePrivacyFocus) { releasePrivacyFocus(); releasePrivacyFocus = null; }
     if (!settings.onboarded) showOnboard();
+  });
+
+  $('#update-download').addEventListener('click', async () => {
+    const res = await cue.updateDownload();
+    if (!res.ok) showStatus(res.error || 'Could not download update.');
+    else showStatus('Downloading update…');
+  });
+  $('#update-install').addEventListener('click', async () => {
+    await cue.updateInstall();
+  });
+  $('#update-defer').addEventListener('click', async () => {
+    await cue.updateDefer();
+    $('#update-banner').classList.add('hidden');
+  });
+
+  $('#copy-diagnostics').addEventListener('click', async () => {
+    const diag = await cue.diagnosticsGet();
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(diag, null, 2));
+      showStatus('Diagnostics copied to clipboard.');
+    } catch (_) {
+      showStatus('Could not copy diagnostics.');
+    }
+  });
+  $('#view-logs').addEventListener('click', async () => {
+    const res = await cue.openLog();
+    if (!res.ok) showStatus(res.error || 'Could not open log file.');
+  });
+  $('#test-connection').addEventListener('click', async () => {
+    const res = await cue.providerTest(settings.provider);
+    showStatus(res.ok ? res.message : (res.error || 'Connection failed.'));
+  });
+  $('#report-bug').addEventListener('click', () => cue.openPane('https://github.com/ch1kim0n1/cue/issues'));
+  $('#check-updates').addEventListener('click', async () => {
+    const res = await cue.updateCheckLatest();
+    if (!res.ok) {
+      showStatus(res.error || 'Update check failed.');
+      return;
+    }
+    if (res.tag && res.tag.replace(/^v/, '') !== String(res.current || '').replace(/^v/, '')) {
+      showStatus('Cue ' + res.tag + ' is available. Download from GitHub Releases.');
+    } else {
+      showStatus('Cue is up to date (' + res.current + ').');
+    }
+  });
+
+  const helpScrim = $('#help-scrim');
+  let releaseHelpFocus = null;
+  function openHelp() {
+    helpScrim.classList.remove('hidden');
+    if (window.CUE_FOCUS) releaseHelpFocus = window.CUE_FOCUS.trapFocus($('#help'), { initialFocus: '#help-close' });
+  }
+  function closeHelp() {
+    helpScrim.classList.add('hidden');
+    if (releaseHelpFocus) { releaseHelpFocus(); releaseHelpFocus = null; }
+  }
+  $('#open-help').addEventListener('click', openHelp);
+  $('#help-close').addEventListener('click', closeHelp);
+  helpScrim.addEventListener('click', (e) => { if (e.target === helpScrim) closeHelp(); });
+  $('#help-privacy').addEventListener('click', (e) => {
+    e.preventDefault();
+    cue.openPane('https://github.com/ch1kim0n1/cue/blob/main/docs/privacy-policy.md');
+  });
+  $('#help-terms').addEventListener('click', (e) => {
+    e.preventDefault();
+    cue.openPane('https://github.com/ch1kim0n1/cue/blob/main/docs/terms.md');
   });
 
   $('#ob-next').addEventListener('click', () => {
@@ -914,7 +1000,6 @@
     if (obIndex > 0) { obIndex--; renderOnboard(); }
   });
   $('#ob-skip').addEventListener('click', async () => {
-    // Skip never marks onboarded. Hide the guide and open Settings so the user can add a key.
     obScrim.classList.add('hidden');
     if (releaseOnboardFocus) { releaseOnboardFocus(); releaseOnboardFocus = null; }
     showStatus('Setup is not finished. Add an API key in Settings, then reopen the guide from the Cue logo.');
@@ -944,7 +1029,7 @@
     pulseLive(!!st.active);
     animateIn($('#toolbar'), { y: -8, duration: 0.4 });
     animateIn($('#panel'), { y: 10, duration: 0.42 });
-    const privacyStale = !settings.privacyAck || Number(settings.privacyNoticeVersion || 0) < 2;
+    const privacyStale = await cue.settingsNeedsPrivacyAck();
     if (privacyStale) showPrivacy();
     else if (!settings.onboarded) showOnboard();
   })();

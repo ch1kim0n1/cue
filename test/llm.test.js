@@ -39,3 +39,12 @@ test('createLLM is ready for nvidia with a key and model', () => {
   assert.equal(llm.ready, true);
   assert.equal(llm.provider, 'nvidia');
 });
+
+test('isModelMissing detects common provider errors', () => {
+  const { isModelMissing, FALLBACK_MODELS } = require('../src/llm');
+  assert.equal(isModelMissing({ code: 'model_not_found' }), true);
+  assert.equal(isModelMissing({ status: 404 }), true);
+  assert.equal(isModelMissing({ message: 'The model does not exist' }), true);
+  assert.equal(isModelMissing({ status: 401, message: 'Unauthorized' }), false);
+  assert.equal(FALLBACK_MODELS.openai.fast, 'gpt-4o-mini');
+});

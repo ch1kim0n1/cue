@@ -11,6 +11,12 @@
 </head>
 <body>
   <div id="app">
+    <div id="update-banner" class="hidden" role="status">
+      <span id="update-banner-text">Update available</span>
+      <button type="button" id="update-download" class="ra-btn">Download</button>
+      <button type="button" id="update-install" class="ra-btn hidden">Install now</button>
+      <button type="button" id="update-defer" class="ra-btn">Defer</button>
+    </div>
     <div id="toolbar">
       <button class="tb-logo" id="logo-btn" title="Cue guide" aria-label="Open Cue guide"></button>
       <span class="tb-brand">Cue</span>
@@ -25,6 +31,7 @@
       <span id="live-dot" class="off" aria-hidden="true"></span>
       <div id="panel" class="glass no-drag">
         <div id="messages"></div>
+        <div id="cue-status" role="status" aria-live="assertive" aria-atomic="true"></div>
 
         <div id="response-actions" class="hidden">
           <button type="button" id="copy-btn" class="ra-btn" title="Copy response">Copy</button>
@@ -134,13 +141,37 @@
         <div class="s-danger-row">
           <button type="button" id="clear-keys" class="ra-btn">Clear all keys</button>
           <button type="button" id="wipe-data" class="ra-btn">Delete my data</button>
+          <button type="button" id="test-connection" class="ra-btn">Test connection</button>
         </div>
 
         <label class="s-label">Diagnostics</label>
         <pre class="s-diag" id="diagnostics-box">Open Settings to refresh.</pre>
+        <div class="s-danger-row">
+          <button type="button" id="copy-diagnostics" class="ra-btn">Copy diagnostics</button>
+          <button type="button" id="view-logs" class="ra-btn">View logs</button>
+          <button type="button" id="open-help" class="ra-btn">Help</button>
+          <button type="button" id="report-bug" class="ra-btn">Report a bug</button>
+          <button type="button" id="check-updates" class="ra-btn">Check for updates</button>
+        </div>
         <div class="platform-note">Official builds: Windows x64, macOS Intel + Apple Silicon. Linux is community-supported only. English UI only (i18n deferred).</div>
 
         <div class="s-status" id="s-status"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="help-scrim" class="hidden" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <div id="help" class="glass">
+      <div class="s-head">
+        <div class="s-title" id="help-title">Help</div>
+        <button type="button" id="help-close" class="s-close">Close</button>
+      </div>
+      <div class="ob-body">
+        <p><strong>Cue appeared in Zoom.</strong> Set Zoom capture mode to Advanced capture with window filtering. Exclusion is best-effort.</p>
+        <p><strong>403 on listening.</strong> Your OpenAI key may block Whisper. Enable audio models or add a Gemini key.</p>
+        <p><strong>Blank screenshots.</strong> Grant screen capture permission. Over Remote Desktop/VM, desktop capture may be unavailable.</p>
+        <p><strong>Keys / data.</strong> Settings shows the local data path. Transcripts are memory-only and clear on quit.</p>
+        <p><a class="linkish" id="help-privacy" href="#">Privacy policy</a> · <a class="linkish" id="help-terms" href="#">Terms</a></p>
       </div>
     </div>
   </div>
@@ -178,6 +209,7 @@
 
   <script src="vendor/gsap.min.js"></script>
   <script src="icons.js"></script>
+  <script src="markdown.js"></script>
   <script src="focus-trap.js"></script>
   <script src="renderer.js"></script>
 </body>

@@ -70,8 +70,54 @@ jobs:
         run: |
           $exe = Get-ChildItem dist\*.exe | Select-Object -First 1
           if (-not $exe) { throw 'No Windows exe found to verify' }
-          & "${env:ProgramFiles(x86)}\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe" verify /pa $exe.FullName
-        continue-on-error: true
+          $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+          $signtool = Get-ChildItem -Path $kits -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found under Windows Kits' }
+          Write-Host "Using $($signtool.FullName)"
+          & $signtool.FullName verify /pa $exe.FullName
+          if ($LASTEXITCODE -ne 0) { throw "signtool verify failed with exit $LASTEXITCODE" }
+
+      - name: Staple macOS notarization ticket
+        if: matrix.os == 'macos-latest' && env.MAC_SIGNING_CONFIGURED == 'true'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          stapled=0
+          for app in dist/mac*/Cue.app; do
+            echo "Stapling $app"
+            xcrun stapler staple "$app"
+            spctl --assess --verbose --type execute "$app"
+            stapled=1
+          done
+          if [ "$stapled" -eq 0 ]; then
+            for zip in dist/*.zip; do
+              tmp=$(mktemp -d)
+              unzip -q "$zip" -d "$tmp"
+              app=$(find "$tmp" -name 'Cue.app' -type d | head -n 1)
+              if [ -z "$app" ]; then
+                echo "No Cue.app inside $zip"
+                rm -rf "$tmp"
+                continue
+              fi
+              echo "Stapling $app from $zip"
+              xcrun stapler staple "$app"
+              spctl --assess --verbose --type execute "$app"
+              (
+                cd "$tmp"
+                rm -f "$OLDPWD/$zip"
+                zip -qry "$OLDPWD/$zip" .
+              )
+              rm -rf "$tmp"
+              stapled=1
+            done
+          fi
+          if [ "$stapled" -eq 0 ]; then
+            echo "No Cue.app found to staple after signed mac build"
+            exit 1
+          fi
 
       - name: Upload to GitHub Release
         if: matrix.os != 'macos-latest' || env.MAC_SIGNING_CONFIGURED == 'true'

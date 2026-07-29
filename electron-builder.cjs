@@ -74,5 +74,8 @@ module.exports = {
     createStartMenuShortcut: true,
     shortcutName: "Cue",
     uninstallDisplayName: "Cue",
+    // Keep userData (cue-data.json with encrypted keys). Users wipe via Settings
+    // → Delete my data, or delete %APPDATA%\Cue manually after uninstall.
+    deleteAppDataOnUninstall: false,
   },
 };

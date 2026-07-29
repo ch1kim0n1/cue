@@ -38,13 +38,19 @@ Open-source alternative to tools like Cluely. Runs on **Windows** and **macOS**.
 
 ## Install
 
-### Option A: Download a release
+### Option A: Download Cue
 
-1. Open [Releases](../../releases).
-2. **Windows:** download the `.exe` installer (NSIS) or the portable build.
-3. **macOS:** download the `Cue-…-arm64-mac.zip`, unzip, move `Cue.app` into Applications.
+Latest release: [github.com/ch1kim0n1/cue/releases/latest](https://github.com/ch1kim0n1/cue/releases/latest)
 
-Signed mac builds open on first double-click. Unsigned forks may need Gatekeeper workarounds.
+| Platform | Asset |
+|---|---|
+| **Windows x64** | `Cue-*-win-x64.exe` (NSIS installer) or the portable `.exe` |
+| **macOS Apple Silicon** | `Cue-*-arm64-mac.zip` → unzip → move `Cue.app` to Applications |
+| **macOS Intel** | `Cue-*-x64-mac.zip` → same steps |
+
+Signed mac builds open on first double-click when notarized and stapled. Unsigned forks may need Gatekeeper workarounds.
+
+Privacy policy and terms: [docs/privacy-policy.md](docs/privacy-policy.md), [docs/terms.md](docs/terms.md). See also [CHANGELOG.md](CHANGELOG.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ### Option B: Run from source
 
@@ -62,7 +68,7 @@ Build packages:
 ```bash
 npm run dist:win      # Windows NSIS + portable
 npm run pack         # unpacked dir for current platform
-npm run dist         # mac zip (arm64)
+npm run dist         # mac zip (arm64 + x64)
 ```
 
 ---

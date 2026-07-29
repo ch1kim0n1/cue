@@ -1,6 +1,11 @@
-const { app, BrowserWindow, ipcMain, globalShortcut, screen, session, desktopCapturer, shell, systemPreferences } = require('electron');
+const {
+  app, BrowserWindow, ipcMain, globalShortcut, screen, session,
+  desktopCapturer, shell, systemPreferences, crashReporter, net
+} = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const https = require('https');
 const store = require('./src/store');
 const { captureScreenshot } = require('./src/screen');
 const { createSTT } = require('./src/stt');
@@ -12,19 +17,26 @@ const { DEFAULT_ASSIST_SHORTCUT, validateAssistShortcut } = require('./src/short
 const { screenPermissionMessage, isMac, isWindows } = require('./src/platform');
 const { isAllowedOpenUrl } = require('./src/urls');
 const { friendlyProviderError, withTimeout } = require('./src/errors');
-const { providerLabel } = require('./src/secrets');
+const { providerLabel, looksLikeKey } = require('./src/secrets');
 const { createLogger } = require('./src/logger');
-const { hasProviderKey } = require('./src/settings-model');
+const { hasProviderKey, needsPrivacyAck, PRIVACY_NOTICE_VERSION } = require('./src/settings-model');
 const { contentProtectionWarning, screenshotFailureMessage } = require('./src/capabilities');
-const os = require('os');
 
 const FEATURE_TIMEOUT_MS = 45000;
 const STT_TIMEOUT_MS = 30000;
 const FEATURE_COOLDOWN_MS = 400;
-const MAX_BUFFER_BYTES = 16000 * 2 * 30; // ~30s PCM per channel
+const CONNECT_TIMEOUT_MS = 2000;
+const MAX_BUFFER_BYTES = 16000 * 2 * 30;
+const MAX_TRANSCRIPT_TURNS = 500;
+const MEMORY_WARN_PERCENT = 8;
 const FLUSH_MS = 3500;
 const MIN_BYTES = Math.floor(16000 * 2 * 0.6);
 const RMS_GATE = 240;
+
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+}
 
 let win = null;
 let registeredAssistShortcut = null;
@@ -33,8 +45,12 @@ let lastFeatureAt = 0;
 let lastError = null;
 let flushTimer = null;
 let logStream = null;
+let memoryTimer = null;
+let pendingUpdate = null;
+let autoUpdaterRef = null;
+let boundsSaveTimer = null;
 
-const state = { capturing: false, busy: false, transcribing: { you: false, them: false } };
+const state = { capturing: false, busy: false, transcribing: { you: false, them: false }, offline: false };
 let sttDisabled = false;
 const buffers = { you: [], them: [] };
 const transcript = [];
@@ -70,6 +86,11 @@ function send(channel, data) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, data);
 }
 
+function pushTranscript(turn) {
+  transcript.push(turn);
+  while (transcript.length > MAX_TRANSCRIPT_TURNS) transcript.shift();
+}
+
 function pushBuffer(channel, buf) {
   const list = buffers[channel];
   list.push(buf);
@@ -92,15 +113,58 @@ function mediaAccessStatus() {
   return out;
 }
 
+function clampBoundsToDisplay(bounds) {
+  if (!bounds || typeof bounds !== 'object') return null;
+  const displays = screen.getAllDisplays();
+  const matches = displays.some((d) => {
+    const a = d.workArea;
+    return bounds.x < a.x + a.width && bounds.x + Math.min(bounds.width || 100, a.width) > a.x &&
+      bounds.y < a.y + a.height && bounds.y + Math.min(bounds.height || 100, a.height) > a.y;
+  });
+  if (!matches) return null;
+  return {
+    width: Math.max(480, Math.min(Number(bounds.width) || 720, 1600)),
+    height: Math.max(360, Math.min(Number(bounds.height) || 640, 1200)),
+    x: Math.round(Number(bounds.x)),
+    y: Math.round(Number(bounds.y))
+  };
+}
+
+function scheduleBoundsSave() {
+  if (!win || win.isDestroyed()) return;
+  clearTimeout(boundsSaveTimer);
+  boundsSaveTimer = setTimeout(() => {
+    if (!win || win.isDestroyed()) return;
+    const b = win.getBounds();
+    store.setSettings({ windowBounds: b });
+  }, 400);
+}
+
+function focusExistingWindow() {
+  if (!win || win.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  send('capture:state', { active: state.capturing });
+}
+
 function createWindow() {
+  const settings = store.getSettings();
+  const saved = clampBoundsToDisplay(settings.windowBounds);
   const { workArea } = screen.getPrimaryDisplay();
-  const W = 720;
-  const H = 640;
+  const defaults = {
+    width: 720,
+    height: 640,
+    x: Math.round(workArea.x + (workArea.width - 720) / 2),
+    y: workArea.y + 8
+  };
+  const bounds = saved || defaults;
+
   win = new BrowserWindow({
-    width: W,
-    height: H,
-    x: Math.round(workArea.x + (workArea.width - W) / 2),
-    y: workArea.y + 8,
+    ...bounds,
     frame: false,
     transparent: true,
     hasShadow: false,
@@ -133,24 +197,42 @@ function createWindow() {
 
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event, url) => {
-    const allowed = url.startsWith('file://');
-    if (!allowed) {
+    if (!url.startsWith('file://')) {
       event.preventDefault();
       log.warn('blocked navigation', url);
     }
   });
+
+  win.on('move', scheduleBoundsSave);
+  win.on('resize', scheduleBoundsSave);
 
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.webContents.on('did-finish-load', () => win.showInactive());
   win.webContents.on('render-process-gone', (_e, details) => {
     log.error('renderer gone', details);
     lastError = 'Renderer crashed: ' + (details && details.reason);
-    send('status', { message: 'Cue hit a display error and is recovering.' });
+    const dumpDir = app.getPath('crashDumps');
+    send('status', { message: 'Cue hit a display error and is recovering. Crash dumps: ' + dumpDir });
     setTimeout(() => {
       if (!win || win.isDestroyed()) createWindow();
       else win.reload();
     }, 400);
   });
+}
+
+function checkMemoryPressure() {
+  try {
+    if (typeof process.getSystemMemoryInfo !== 'function') return;
+    const info = process.getSystemMemoryInfo();
+    if (!info || !info.total) return;
+    const freePct = (info.free / info.total) * 100;
+    if (freePct < MEMORY_WARN_PERCENT && state.capturing) {
+      setCapturing(false);
+      send('status', { message: 'Listening stopped: system memory is low. Free RAM and try again.' });
+    }
+  } catch (e) {
+    log.debug('memory check failed', e && e.message);
+  }
 }
 
 async function flushChannel(channel) {
@@ -180,8 +262,7 @@ async function flushChannel(channel) {
     }
     if (res.text && res.text.trim()) {
       const turn = { channel, text: res.text.trim(), ts: Date.now() };
-      transcript.push(turn);
-      log.debug('transcript', channel, turn.text.slice(0, 80));
+      pushTranscript(turn);
       send('transcript', turn);
     }
   } catch (e) {
@@ -199,7 +280,13 @@ function handleSttError(err) {
   const noAccess = err.status === 403 || err.status === 401 || err.code === 'model_not_found';
   if (noAccess || err.status === 429) sttDisabled = true;
   lastError = friendlyProviderError(err, err.provider);
-  if (noAccess) {
+  if (err.status === 401) {
+    send('status', {
+      message: 'Your ' + providerLabel(err.provider) +
+        ' key may have expired or been revoked. Open Settings to update it.'
+    });
+    send('settings:open', {});
+  } else if (noAccess) {
     send('status', {
       message: 'Transcription off: your ' + providerLabel(err.provider) +
         ' key cannot use speech-to-text. Screen and coding help still work. Enable Whisper access or add a Gemini key.'
@@ -212,6 +299,7 @@ function handleSttError(err) {
 function startFlushLoop() {
   if (flushTimer) return;
   flushTimer = setInterval(() => { flushChannel('you'); flushChannel('them'); }, FLUSH_MS);
+  if (!memoryTimer) memoryTimer = setInterval(checkMemoryPressure, 15000);
 }
 
 function stopFlushLoop() {
@@ -222,6 +310,10 @@ function setCapturing(active) {
   const settings = store.getSettings();
   if (active && !settings.listenConsent) {
     send('status', { message: 'Confirm meeting-audio consent in Settings before listening.' });
+    return false;
+  }
+  if (active && state.offline) {
+    send('status', { message: 'Cue is offline. Listening needs a network connection for transcription.' });
     return false;
   }
   if (active && isMac()) {
@@ -255,6 +347,41 @@ function clearTranscript() {
   return { ok: true };
 }
 
+function probeHost(hostname, timeoutMs) {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname,
+      path: '/',
+      method: 'HEAD',
+      timeout: timeoutMs
+    }, (res) => {
+      res.resume();
+      resolve(true);
+    });
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.on('error', () => resolve(false));
+    req.end();
+  });
+}
+
+async function ensureOnline(provider) {
+  if (state.offline) {
+    const err = Object.assign(new Error('Cue is offline'), { code: 'ENOTFOUND', network: true });
+    throw err;
+  }
+  const hosts = {
+    openai: 'api.openai.com',
+    anthropic: 'api.anthropic.com',
+    gemini: 'generativelanguage.googleapis.com',
+    nvidia: 'integrate.api.nvidia.com'
+  };
+  const host = hosts[provider] || 'api.openai.com';
+  const ok = await withTimeout(probeHost(host, CONNECT_TIMEOUT_MS), CONNECT_TIMEOUT_MS + 200, 'Connectivity');
+  if (!ok) {
+    throw Object.assign(new Error('Could not reach ' + host), { code: 'ENOTFOUND', network: true });
+  }
+}
+
 async function runFeature(mode, userText) {
   if (state.busy) return;
   const now = Date.now();
@@ -264,6 +391,7 @@ async function runFeature(mode, userText) {
   state.busy = true;
   lastFeatureAt = now;
   lastFeature = { mode, userText: userText || '' };
+  let imageDataUrl = null;
   try {
     const settings = store.getSettings();
     const llm = createLLM(settings);
@@ -277,7 +405,24 @@ async function runFeature(mode, userText) {
       return;
     }
 
-    let imageDataUrl = null;
+    if (state.offline) {
+      const msg = 'Cue is offline. Reconnect to use Assist and other AI features.';
+      lastError = msg;
+      send('status', { message: msg, kind: 'network' });
+      send('llm:error', { message: msg, kind: 'network' });
+      return;
+    }
+
+    try {
+      await ensureOnline(settings.provider);
+    } catch (e) {
+      const msg = friendlyProviderError(e, settings.provider);
+      lastError = msg;
+      send('status', { message: msg, kind: 'network' });
+      send('llm:error', { message: msg, kind: 'network' });
+      return;
+    }
+
     if (def.needsScreen) {
       try {
         const shot = await captureScreenshot();
@@ -300,18 +445,80 @@ async function runFeature(mode, userText) {
       maxTokens: def.maxTokens || 4096,
       onToken: (t) => send('llm:token', { text: t })
     }), FEATURE_TIMEOUT_MS, 'Model response');
+    if (llm.usedFallback && llm.fallbackModel) {
+      send('status', {
+        message: 'Model unavailable; used fallback ' + llm.fallbackModel + '. Update Models in Settings.'
+      });
+    }
     send('llm:done', {});
   } catch (e) {
-    lastError = friendlyProviderError(e, store.getSettings().provider);
+    const settings = store.getSettings();
+    lastError = friendlyProviderError(e, settings.provider);
     log.error('feature failed', mode, e && e.message);
-    send('llm:error', { message: lastError });
+    if (e && (e.status === 401 || e.statusCode === 401)) {
+      send('status', {
+        message: 'Your ' + providerLabel(settings.provider) +
+          ' key may have expired or been revoked. Open Settings to update it.'
+      });
+      send('settings:open', {});
+    }
+    const kind = (e && (e.network || e.code === 'ENOTFOUND' || e.code === 'ECONNREFUSED')) ? 'network' : 'error';
+    send('llm:error', { message: lastError, kind });
+    if (kind === 'network') send('status', { message: lastError, kind: 'network' });
   } finally {
+    imageDataUrl = null;
     state.busy = false;
+  }
+}
+
+async function testProviderConnection(provider) {
+  const settings = store.getSettings();
+  const key = (settings.apiKeys || {})[provider];
+  if (!key) return { ok: false, error: 'No ' + providerLabel(provider) + ' key saved.' };
+  const format = looksLikeKey(provider, key);
+  if (!format.ok) return { ok: false, error: format.hint || 'Key format looks wrong.', warn: true };
+  try {
+    await ensureOnline(provider);
+    if (provider === 'openai' || provider === 'nvidia') {
+      const OpenAI = require('openai');
+      const client = new OpenAI({
+        apiKey: key,
+        baseURL: provider === 'nvidia' ? 'https://integrate.api.nvidia.com/v1' : undefined
+      });
+      await withTimeout(client.models.list(), 8000, 'Connection test');
+      return { ok: true, message: providerLabel(provider) + ' connection ok.' };
+    }
+    if (provider === 'anthropic') {
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey: key });
+      await withTimeout(client.messages.create({
+        model: (settings.models.anthropic && settings.models.anthropic.fast) || 'claude-3-5-haiku-latest',
+        max_tokens: 1,
+        messages: [{ role: 'user', content: 'ping' }]
+      }), 8000, 'Connection test');
+      return { ok: true, message: 'Anthropic connection ok.' };
+    }
+    if (provider === 'gemini') {
+      const { GoogleGenAI } = require('@google/genai');
+      const ai = new GoogleGenAI({ apiKey: key });
+      await withTimeout(ai.models.generateContent({
+        model: (settings.models.gemini && settings.models.gemini.fast) || 'gemini-2.5-flash',
+        contents: [{ role: 'user', parts: [{ text: 'ping' }] }]
+      }), 8000, 'Connection test');
+      return { ok: true, message: 'Gemini connection ok.' };
+    }
+    return { ok: false, error: 'Unknown provider.' };
+  } catch (e) {
+    return { ok: false, error: friendlyProviderError(e, provider) };
   }
 }
 
 function diagnostics() {
   const settings = store.getSettings();
+  let memory = null;
+  try {
+    if (typeof process.getSystemMemoryInfo === 'function') memory = process.getSystemMemoryInfo();
+  } catch { /* ignore */ }
   return {
     version: app.getVersion(),
     platform: process.platform,
@@ -321,11 +528,17 @@ function diagnostics() {
     hasKey: hasProviderKey(settings),
     capturing: state.capturing,
     busy: state.busy,
+    offline: state.offline,
     lastError,
     dataPath: store.dataPath(),
     media: mediaAccessStatus(),
     encryptionWarning: settings._encryptionWarning || null,
-    saveError: settings._saveError || null
+    saveError: settings._saveError || null,
+    crashDumps: app.getPath('crashDumps'),
+    logPath: path.join(app.getPath('userData'), 'cue.log'),
+    pendingUpdate: pendingUpdate,
+    memory,
+    privacyNoticeVersion: PRIVACY_NOTICE_VERSION
   };
 }
 
@@ -336,16 +549,19 @@ function setupAutoUpdater() {
   }
   try {
     const { autoUpdater } = require('electron-updater');
-    autoUpdater.autoDownload = true;
+    autoUpdaterRef = autoUpdater;
+    autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.on('error', (err) => log.warn('updater error', err && err.message));
     autoUpdater.on('update-available', (info) => {
+      pendingUpdate = { version: info && info.version, state: 'available' };
       log.info('update available', info && info.version);
-      send('status', { message: 'Update ' + (info && info.version) + ' downloading in the background.' });
+      send('update:available', pendingUpdate);
     });
     autoUpdater.on('update-downloaded', (info) => {
+      pendingUpdate = { version: info && info.version, state: 'downloaded' };
       log.info('update downloaded', info && info.version);
-      send('status', { message: 'Update ready. It installs when you quit Cue.' });
+      send('update:downloaded', pendingUpdate);
     });
     autoUpdater.checkForUpdates().catch((e) => log.warn('update check failed', e && e.message));
   } catch (e) {
@@ -353,147 +569,256 @@ function setupAutoUpdater() {
   }
 }
 
-ipcMain.handle('settings:get', () => store.getSettings());
-ipcMain.handle('settings:set', (_e, patch) => {
-  sttDisabled = false;
-  const next = store.setSettings(patch);
-  if (next._saveError) send('status', { message: 'Could not save settings: ' + next._saveError });
-  return next;
-});
-ipcMain.handle('settings:wipe', () => {
-  clearTranscript();
-  const result = store.wipeUserData();
-  sttDisabled = false;
-  lastFeature = null;
-  return result;
-});
-ipcMain.handle('shortcut:assist:set', (_e, accelerator) => setAssistShortcut(accelerator));
-ipcMain.handle('capture:toggle', () => setCapturing(!state.capturing));
-ipcMain.handle('capture:state', () => ({ active: state.capturing }));
-ipcMain.handle('capture:permissions', () => mediaAccessStatus());
-ipcMain.handle('transcript:get', () => transcript.slice());
-ipcMain.handle('transcript:clear', () => clearTranscript());
-ipcMain.handle('diagnostics:get', () => diagnostics());
-ipcMain.handle('app:paths', () => ({
-  dataPath: store.dataPath(),
-  userData: app.getPath('userData'),
-  logPath: path.join(app.getPath('userData'), 'cue.log')
-}));
-ipcMain.handle('feature:retry', () => {
-  if (!lastFeature) return { ok: false, error: 'Nothing to retry yet.' };
-  runFeature(lastFeature.mode, lastFeature.userText);
-  return { ok: true, ...lastFeature };
-});
-ipcMain.on('ask', (_e, payload) => {
-  if (!payload || typeof payload !== 'object') return;
-  runFeature(payload.mode, payload.text);
-});
-ipcMain.on('mic:pcm', (_e, arrayBuffer) => {
-  if (state.capturing) pushBuffer('you', Buffer.from(arrayBuffer));
-});
-ipcMain.on('system:pcm', (_e, arrayBuffer) => {
-  if (state.capturing) pushBuffer('them', Buffer.from(arrayBuffer));
-});
-ipcMain.on('mouse:ignore', (_e, v) => {
-  if (win) win.setIgnoreMouseEvents(!!v, { forward: true });
-});
-ipcMain.on('open-pane', (_e, url) => {
-  if (!isAllowedOpenUrl(url)) {
-    log.warn('blocked open-pane url', typeof url === 'string' ? url.slice(0, 120) : typeof url);
-    return;
-  }
-  shell.openExternal(url).catch((e) => log.warn('openExternal failed', e && e.message));
-});
-ipcMain.on('log', (_e, msg) => log.info('renderer', typeof msg === 'string' ? msg.slice(0, 500) : msg));
-
-function registerAssistShortcut(accelerator) {
-  const checked = validateAssistShortcut(accelerator);
-  if (!checked.ok) return checked;
-
-  const next = checked.accelerator;
-  const previous = registeredAssistShortcut;
-  if (previous) globalShortcut.unregister(previous);
-
-  try {
-    if (!globalShortcut.register(next, () => runFeature('assist', ''))) {
-      if (previous) globalShortcut.register(previous, () => runFeature('assist', ''));
-      return { ok: false, error: 'That shortcut is already in use by another application.' };
-    }
-  } catch (_) {
-    if (previous) globalShortcut.register(previous, () => runFeature('assist', ''));
-    return { ok: false, error: 'That key combination is not a valid global shortcut.' };
-  }
-
-  registeredAssistShortcut = next;
-  return { ok: true, accelerator: next };
-}
-
-function setAssistShortcut(accelerator) {
-  const result = registerAssistShortcut(accelerator);
-  if (result.ok) store.setSettings({ shortcuts: { assist: result.accelerator } });
-  return result;
-}
-
-function registerShortcuts() {
-  globalShortcut.register('CommandOrControl+H', () => runFeature('leetcode', ''));
-  globalShortcut.register('CommandOrControl+Shift+X', () => app.quit());
-
-  const settings = store.getSettings();
-  const configured = settings.shortcuts && settings.shortcuts.assist;
-  const result = registerAssistShortcut(configured || DEFAULT_ASSIST_SHORTCUT);
-  if (!result.ok && configured && configured !== DEFAULT_ASSIST_SHORTCUT) {
-    log.warn('assist shortcut unavailable, falling back', result.error);
-    const fallback = registerAssistShortcut(DEFAULT_ASSIST_SHORTCUT);
-    if (fallback.ok) store.setSettings({ shortcuts: { assist: DEFAULT_ASSIST_SHORTCUT } });
-  }
-}
-
-process.on('uncaughtException', (err) => {
-  log.error('uncaughtException', err && err.stack ? err.stack : err);
-  lastError = err && err.message ? err.message : String(err);
-});
-process.on('unhandledRejection', (reason) => {
-  log.error('unhandledRejection', reason && reason.stack ? reason.stack : reason);
-  lastError = reason && reason.message ? reason.message : String(reason);
-});
-
-app.whenReady().then(() => {
-  attachLogFile();
-  if (app.dock) app.dock.hide();
-
-  const allowMedia = (permission) =>
-    permission === 'media' ||
-    permission === 'microphone' ||
-    permission === 'audioCapture' ||
-    permission === 'display-capture';
-
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(allowMedia(permission)));
-  session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowMedia(permission));
-
-  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
-    desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
-      if (sources.length) callback({ video: sources[0], audio: 'loopback' });
-      else callback();
-    }).catch(() => callback());
-  }, { useSystemPicker: false });
-
-  createWindow();
-  registerShortcuts();
-  setupAutoUpdater();
-
-  const protectWarn = contentProtectionWarning(process.platform, os.release());
-  if (protectWarn) {
-    log.warn(protectWarn);
-    setTimeout(() => send('status', { message: protectWarn }), 1200);
-  }
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+function checkLatestRelease() {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'api.github.com',
+      path: '/repos/ch1kim0n1/cue/releases/latest',
+      method: 'GET',
+      headers: { 'User-Agent': 'cue-updater', Accept: 'application/vnd.github+json' },
+      timeout: 5000
+    }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(body);
+          resolve({
+            ok: true,
+            tag: json.tag_name || null,
+            url: json.html_url || 'https://github.com/ch1kim0n1/cue/releases',
+            current: app.getVersion()
+          });
+        } catch (e) {
+          resolve({ ok: false, error: 'Could not parse GitHub release response.' });
+        }
+      });
+    });
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'GitHub release check timed out.' }); });
+    req.on('error', () => resolve({ ok: false, error: 'Could not reach GitHub releases.' }));
+    req.end();
   });
-});
+}
 
-app.on('will-quit', () => {
-  globalShortcut.unregisterAll();
-  try { if (logStream) logStream.end(); } catch { /* ignore */ }
-});
-app.on('window-all-closed', () => app.quit());
+if (gotLock) {
+  app.on('second-instance', () => {
+    focusExistingWindow();
+  });
+
+  /** @returns {object} */
+  ipcMain.handle('settings:get', () => store.getSettings());
+  /**
+   * @param {Electron.IpcMainInvokeEvent} _e
+   * @param {object} patch
+   * @returns {object}
+   */
+  ipcMain.handle('settings:set', (_e, patch) => {
+    sttDisabled = false;
+    const next = store.setSettings(patch);
+    if (next._saveError) send('status', { message: 'Could not save settings: ' + next._saveError });
+    return next;
+  });
+  /** @returns {{ ok: boolean, error?: string }} */
+  ipcMain.handle('settings:wipe', () => {
+    clearTranscript();
+    const result = store.wipeUserData();
+    sttDisabled = false;
+    lastFeature = null;
+    return result;
+  });
+  /** @returns {boolean} */
+  ipcMain.handle('settings:needs-privacy-ack', () => needsPrivacyAck(store.getSettings()));
+  /** @returns {number} */
+  ipcMain.handle('settings:privacy-version', () => PRIVACY_NOTICE_VERSION);
+  ipcMain.handle('shortcut:assist:set', (_e, accelerator) => setAssistShortcut(accelerator));
+  ipcMain.handle('capture:toggle', () => setCapturing(!state.capturing));
+  ipcMain.handle('capture:state', () => ({ active: state.capturing }));
+  ipcMain.handle('capture:permissions', () => mediaAccessStatus());
+  ipcMain.handle('transcript:get', () => transcript.slice());
+  ipcMain.handle('transcript:clear', () => clearTranscript());
+  ipcMain.handle('diagnostics:get', () => diagnostics());
+  ipcMain.handle('provider:test', (_e, provider) => testProviderConnection(provider));
+  ipcMain.handle('provider:validate-key', (_e, payload) => {
+    const provider = payload && payload.provider;
+    const value = payload && payload.value;
+    return looksLikeKey(provider, value);
+  });
+  ipcMain.handle('app:paths', () => ({
+    dataPath: store.dataPath(),
+    userData: app.getPath('userData'),
+    logPath: path.join(app.getPath('userData'), 'cue.log'),
+    crashDumps: app.getPath('crashDumps')
+  }));
+  ipcMain.handle('app:open-log', async () => {
+    const logPath = path.join(app.getPath('userData'), 'cue.log');
+    const err = await shell.openPath(logPath);
+    return { ok: !err, error: err || null };
+  });
+  ipcMain.handle('app:open-crash-dumps', async () => {
+    const dir = app.getPath('crashDumps');
+    const err = await shell.openPath(dir);
+    return { ok: !err, error: err || null };
+  });
+  ipcMain.handle('update:download', async () => {
+    if (!autoUpdaterRef) return { ok: false, error: 'Updater unavailable in this build.' };
+    try {
+      await autoUpdaterRef.downloadUpdate();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e && e.message };
+    }
+  });
+  ipcMain.handle('update:defer', () => {
+    pendingUpdate = pendingUpdate ? { ...pendingUpdate, state: 'deferred' } : null;
+    return { ok: true };
+  });
+  ipcMain.handle('update:install', () => {
+    if (!autoUpdaterRef) return { ok: false, error: 'Updater unavailable.' };
+    setImmediate(() => autoUpdaterRef.quitAndInstall());
+    return { ok: true };
+  });
+  ipcMain.handle('update:check-latest', () => checkLatestRelease());
+  ipcMain.handle('feature:retry', () => {
+    if (!lastFeature) return { ok: false, error: 'Nothing to retry yet.' };
+    runFeature(lastFeature.mode, lastFeature.userText);
+    return { ok: true, ...lastFeature };
+  });
+  ipcMain.handle('net:set-online', (_e, online) => {
+    state.offline = !online;
+    send('net:status', { online: !!online });
+    return { online: !!online };
+  });
+
+  ipcMain.on('ask', (_e, payload) => {
+    if (!payload || typeof payload !== 'object') return;
+    runFeature(payload.mode, payload.text);
+  });
+  ipcMain.on('mic:pcm', (_e, arrayBuffer) => {
+    if (state.capturing) pushBuffer('you', Buffer.from(arrayBuffer));
+  });
+  ipcMain.on('system:pcm', (_e, arrayBuffer) => {
+    if (state.capturing) pushBuffer('them', Buffer.from(arrayBuffer));
+  });
+  ipcMain.on('mouse:ignore', (_e, v) => {
+    if (win) win.setIgnoreMouseEvents(!!v, { forward: true });
+  });
+  ipcMain.on('open-pane', (_e, url) => {
+    if (!isAllowedOpenUrl(url)) {
+      log.warn('blocked open-pane url', typeof url === 'string' ? url.slice(0, 120) : typeof url);
+      return;
+    }
+    shell.openExternal(url).catch((e) => log.warn('openExternal failed', e && e.message));
+  });
+  ipcMain.on('log', (_e, msg) => log.info('renderer', typeof msg === 'string' ? msg.slice(0, 500) : msg));
+
+  function registerAssistShortcut(accelerator) {
+    const checked = validateAssistShortcut(accelerator);
+    if (!checked.ok) return checked;
+    const next = checked.accelerator;
+    const previous = registeredAssistShortcut;
+    if (previous) globalShortcut.unregister(previous);
+    try {
+      if (!globalShortcut.register(next, () => runFeature('assist', ''))) {
+        if (previous) globalShortcut.register(previous, () => runFeature('assist', ''));
+        return { ok: false, error: 'That shortcut is already in use by another application.' };
+      }
+    } catch (_) {
+      if (previous) globalShortcut.register(previous, () => runFeature('assist', ''));
+      return { ok: false, error: 'That key combination is not a valid global shortcut.' };
+    }
+    registeredAssistShortcut = next;
+    return { ok: true, accelerator: next };
+  }
+
+  function setAssistShortcut(accelerator) {
+    const result = registerAssistShortcut(accelerator);
+    if (result.ok) store.setSettings({ shortcuts: { assist: result.accelerator } });
+    return result;
+  }
+
+  function registerShortcuts() {
+    globalShortcut.register('CommandOrControl+H', () => runFeature('leetcode', ''));
+    globalShortcut.register('CommandOrControl+Shift+X', () => app.quit());
+    const settings = store.getSettings();
+    const configured = settings.shortcuts && settings.shortcuts.assist;
+    const result = registerAssistShortcut(configured || DEFAULT_ASSIST_SHORTCUT);
+    if (!result.ok && configured && configured !== DEFAULT_ASSIST_SHORTCUT) {
+      log.warn('assist shortcut unavailable, falling back', result.error);
+      const fallback = registerAssistShortcut(DEFAULT_ASSIST_SHORTCUT);
+      if (fallback.ok) store.setSettings({ shortcuts: { assist: DEFAULT_ASSIST_SHORTCUT } });
+    }
+  }
+
+  process.on('uncaughtException', (err) => {
+    log.error('uncaughtException', err && err.stack ? err.stack : err);
+    lastError = err && err.message ? err.message : String(err);
+  });
+  process.on('unhandledRejection', (reason) => {
+    log.error('unhandledRejection', reason && reason.stack ? reason.stack : reason);
+    lastError = reason && reason.message ? reason.message : String(reason);
+  });
+
+  app.whenReady().then(() => {
+    try {
+      const dumpDir = path.join(app.getPath('userData'), 'Crashpad');
+      app.setPath('crashDumps', dumpDir);
+    } catch (e) {
+      log.warn('crashDumps path unavailable', e && e.message);
+    }
+    try {
+      crashReporter.start({
+        productName: 'Cue',
+        companyName: 'Cue',
+        submitURL: '',
+        uploadToServer: false,
+        compress: true
+      });
+    } catch (e) {
+      log.warn('crashReporter unavailable', e && e.message);
+    }
+
+    attachLogFile();
+    if (app.dock) app.dock.hide();
+
+    const allowMedia = (permission) =>
+      permission === 'media' ||
+      permission === 'microphone' ||
+      permission === 'audioCapture' ||
+      permission === 'display-capture';
+
+    session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(allowMedia(permission)));
+    session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowMedia(permission));
+    session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+      desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
+        if (sources.length) callback({ video: sources[0], audio: 'loopback' });
+        else callback();
+      }).catch(() => callback());
+    }, { useSystemPicker: false });
+
+    createWindow();
+    registerShortcuts();
+    setupAutoUpdater();
+
+    const protectWarn = contentProtectionWarning(process.platform, os.release());
+    if (protectWarn) {
+      log.warn(protectWarn);
+      setTimeout(() => send('status', { message: protectWarn }), 1200);
+    }
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    });
+  });
+
+  app.on('before-quit', () => {
+    send('capture:stop', {});
+    if (state.capturing) setCapturing(false);
+  });
+
+  app.on('will-quit', () => {
+    globalShortcut.unregisterAll();
+    if (memoryTimer) clearInterval(memoryTimer);
+    try { if (logStream) logStream.end(); } catch { /* ignore */ }
+  });
+  app.on('window-all-closed', () => app.quit());
+}

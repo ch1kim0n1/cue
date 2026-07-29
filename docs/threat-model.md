@@ -31,6 +31,12 @@ Cue is a local Electron overlay. It has no Cue backend and no user accounts. The
 | Meeting recording without consent | In-app privacy notice + listen consent checkbox gated before capture | User can still ignore legal duties |
 | Spend abuse / runaway STT | Feature cooldown, busy flag, buffer cap, provider timeouts | User still controls their own API quotas |
 
+## Residual risks (accepted)
+
+| Risk | Decision | Rationale |
+|---|---|---|
+| CSP `style-src 'unsafe-inline'` | **Accepted** for Cue 0.3.x | GSAP writes `transform` / `opacity` as element inline styles. Refactoring every tween to CSS custom properties is deferred. Mitigations that remain in force: `script-src 'self'` (no inline/eval scripts), `connect-src 'self'`, sandboxed renderer with `contextIsolation`, no Node in the renderer, and markdown escape-first rendering. |
+
 ## Out of scope
 
 - Cue does not authenticate users.
@@ -40,5 +46,7 @@ Cue is a local Electron overlay. It has no Cue backend and no user accounts. The
 ## Related docs
 
 - [Privacy sections in README](../README.md)
+- [Privacy policy](privacy-policy.md)
+- [Terms of use](terms.md)
 - [Windows guide](windows.md)
 - [Rollback notes](rollback.md)
