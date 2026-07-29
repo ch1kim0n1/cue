@@ -1,17 +1,22 @@
 {
   "name": "cue",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Cue is a private AI overlay for meetings and code. Screen, mic, and meeting audio into your own LLM. Works on Windows and macOS.",
   "license": "GPL-3.0-or-later",
   "author": "Cue",
   "main": "main.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "electron .",
     "test": "node --test",
+    "test:smoke": "node test/smoke-main.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --mac zip",
     "dist:win": "electron-builder --win nsis",
-    "dist:win:dir": "electron-builder --win --dir"
+    "dist:win:dir": "electron-builder --win --dir",
+    "verify:vendor": "node scripts/verify-vendor.js"
   },
   "keywords": [
     "electron",
@@ -23,14 +28,17 @@
     "meeting-copilot"
   ],
   "devDependencies": {
-    "electron": "^33.2.1",
-    "electron-builder": "^24.13.3"
+    "electron": "33.2.1",
+    "electron-builder": "24.13.3"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.1",
-    "@google/genai": "^0.3.0",
-    "gsap": "^3.13.0",
-    "lucide-static": "^0.468.0",
-    "openai": "^4.73.0"
+    "@anthropic-ai/sdk": "0.32.1",
+    "@fontsource/ibm-plex-mono": "5.2.5",
+    "@fontsource/outfit": "5.2.5",
+    "@google/genai": "0.3.1",
+    "electron-updater": "6.3.9",
+    "gsap": "3.13.0",
+    "lucide-static": "0.468.0",
+    "openai": "4.73.0"
   }
 }

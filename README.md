@@ -48,7 +48,7 @@ Signed mac builds open on first double-click. Unsigned forks may need Gatekeeper
 
 ### Option B: Run from source
 
-Needs [Node.js](https://nodejs.org) 18+.
+Needs [Node.js](https://nodejs.org) **18–22** (tested in CI with Electron **33.2.1**).
 
 ```bash
 git clone https://github.com/ch1kim0n1/cue.git
@@ -155,6 +155,9 @@ Still open for contribution:
 - [Windows guide](docs/windows.md)
 - [Features](docs/features.md)
 - [Development](docs/development.md)
+- [Threat model](docs/threat-model.md)
+- [Rollback](docs/rollback.md)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
 
 ---
 

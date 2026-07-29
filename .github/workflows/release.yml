@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*' # Automatically trigger when you push a new version tag (e.g., v0.2.0)
+      - 'v*'
 
 permissions:
   contents: write
@@ -17,11 +17,8 @@ jobs:
         os: [macos-latest, windows-latest]
 
     env:
-      # A runner with no certificate can only produce an ad-hoc macOS build, and
-      # macOS refuses those after a download. Publishing one would overwrite a
-      # signed release asset with an unopenable one, so the mac upload below is
-      # gated on this. Set CSC_LINK and the APPLE_* secrets to turn it on.
       MAC_SIGNING_CONFIGURED: ${{ secrets.CSC_LINK != '' }}
+      WIN_SIGNING_CONFIGURED: ${{ secrets.WIN_CSC_LINK != '' || secrets.CSC_LINK != '' }}
 
     steps:
       - name: Check out Git repository
@@ -30,19 +27,24 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          # Keep in sync with package.json engines + Electron 33.2.1
+          node-version: 20
           cache: 'npm'
 
-      - name: Install Dependencies
-        run: npm install
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Build macOS
+      - name: Run tests before packaging
+        run: |
+          npm test
+          npm run test:smoke
+          npm run verify:vendor
+
+      - name: Build macOS (arm64 + x64 zips)
         if: matrix.os == 'macos-latest'
         run: npm run dist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # electron-builder.cjs signs and notarizes only when MAC_SIGN=1; without
-          # these it still builds ad-hoc, so the job keeps working as a build check.
           MAC_SIGN: ${{ secrets.CSC_LINK != '' && '1' || '' }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -55,15 +57,21 @@ jobs:
         run: npm run dist:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Prefer a Windows-specific Authenticode cert when present.
+          CSC_LINK: ${{ secrets.WIN_CSC_LINK != '' && secrets.WIN_CSC_LINK || secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD != '' && secrets.WIN_CSC_KEY_PASSWORD || secrets.CSC_KEY_PASSWORD }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
 
       - name: Upload to GitHub Release
-        # Skipped on macOS until signing is configured, so an ad-hoc build can
-        # never replace a signed asset already attached to the release.
+        # macOS assets only when signed; Windows always uploads (warn if unsigned).
         if: matrix.os != 'macos-latest' || env.MAC_SIGNING_CONFIGURED == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.exe
             dist/*.zip
+            dist/*.yml
+            dist/*.blockmap
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

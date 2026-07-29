@@ -4,7 +4,10 @@ const {
   DEFAULTS,
   deepMerge,
   clampOpacity,
-  normalizeSettings
+  normalizeSettings,
+  migrateSettings,
+  hasProviderKey,
+  SCHEMA_VERSION
 } = require('../src/settings-model');
 
 test('deepMerge nests objects without dropping siblings', () => {
@@ -35,5 +38,17 @@ test('normalizeSettings fills defaults and switches provider to a keyed one', ()
   assert.equal(settings.provider, 'anthropic');
   assert.equal(settings.opacity, 0.55);
   assert.equal(settings.compact, true);
+  assert.equal(settings.schemaVersion, SCHEMA_VERSION);
   assert.equal(settings.models.openai.fast, DEFAULTS.models.openai.fast);
+});
+
+test('migrateSettings preserves onboarded users privacy ack', () => {
+  const migrated = migrateSettings({ schemaVersion: 1, onboarded: true });
+  assert.equal(migrated.privacyAck, true);
+  assert.equal(migrated.schemaVersion, SCHEMA_VERSION);
+});
+
+test('hasProviderKey detects any configured provider', () => {
+  assert.equal(hasProviderKey({ apiKeys: {} }), false);
+  assert.equal(hasProviderKey({ apiKeys: { openai: 'sk' } }), true);
 });

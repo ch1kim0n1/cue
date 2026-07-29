@@ -291,10 +291,31 @@
     $('#live-dot').style.display = collapsed ? 'none' : '';
   });
 
-  $('#stop-btn').addEventListener('click', () => {
+  $('#stop-btn').addEventListener('click', async () => {
     const turningOn = !$('#stop-btn').classList.contains('active');
-    if (turningOn) startSystemAudio();
-    cue.captureToggle();
+    if (turningOn) {
+      if (!settings.listenConsent) {
+        showStatus('Confirm meeting-audio consent in Settings before listening.');
+        openSettings();
+        return;
+      }
+      try {
+        const perms = await cue.capturePermissions();
+        if (perms.microphone === 'denied') {
+          showStatus('Microphone access is denied. Enable Cue in your system privacy settings.');
+          return;
+        }
+        if (perms.screen === 'denied') {
+          showStatus('Screen recording access is denied. Enable Cue in your system privacy settings.');
+          return;
+        }
+      } catch (_) { /* non-mac platforms may not report */ }
+      startSystemAudio();
+    }
+    const active = await cue.captureToggle();
+    if (turningOn && active === false) {
+      stopSystemAudio();
+    }
   });
 
   $('#copy-btn').addEventListener('click', async () => {
@@ -522,9 +543,57 @@
     $('#model-fast').value = m.fast;
     $('#model-smart').value = m.smart;
     applyOpacity(settings.opacity);
+    const consent = $('#listen-consent');
+    if (consent) consent.checked = !!settings.listenConsent;
     syncAssistShortcutLabels();
     $('#s-status').textContent = statusText();
+    refreshPathsAndDiagnostics();
   }
+
+  async function refreshPathsAndDiagnostics() {
+    try {
+      const paths = await cue.appPaths();
+      const pathEl = $('#data-path');
+      if (pathEl) pathEl.textContent = paths.dataPath || 'Unavailable';
+      const diag = await cue.diagnosticsGet();
+      const box = $('#diagnostics-box');
+      if (box) box.textContent = JSON.stringify(diag, null, 2);
+    } catch (_) {
+      const pathEl = $('#data-path');
+      if (pathEl) pathEl.textContent = settings && settings._dataPath ? settings._dataPath : 'Unavailable';
+    }
+  }
+
+  $('#listen-consent').addEventListener('change', async (e) => {
+    settings.listenConsent = !!e.target.checked;
+    await cue.settingsSet({ listenConsent: settings.listenConsent });
+  });
+
+  $('#clear-keys').addEventListener('click', async () => {
+    settings.apiKeys = { openai: '', anthropic: '', gemini: '', deepgram: '', nvidia: '' };
+    $('#key-openai').value = '';
+    $('#key-anthropic').value = '';
+    $('#key-gemini').value = '';
+    $('#key-nvidia').value = '';
+    await cue.settingsSet({ apiKeys: settings.apiKeys });
+    $('#s-status').textContent = statusText();
+    showStatus('All API keys cleared.');
+  });
+
+  $('#wipe-data').addEventListener('click', async () => {
+    const ok = window.confirm('Delete all Cue settings, keys, and resume text on this device?');
+    if (!ok) return;
+    const result = await cue.settingsWipe();
+    if (!result.ok) {
+      showStatus(result.error || 'Could not delete local data.');
+      return;
+    }
+    settings = await cue.settingsGet();
+    fillSettings();
+    applyCompact(!!settings.compact);
+    applyOpacity(settings.opacity != null ? settings.opacity : 0.92);
+    showStatus('Local Cue data deleted.');
+  });
 
   $('#clear-resume').addEventListener('click', async () => {
     $('#resume-context').value = '';
@@ -560,11 +629,13 @@
     settings.apiKeys.gemini = $('#key-gemini').value.trim();
     settings.apiKeys.nvidia = $('#key-nvidia').value.trim();
     settings.resumeContext = $('#resume-context').value.trim();
+    settings.listenConsent = !!($('#listen-consent') && $('#listen-consent').checked);
     if (!settings.models[settings.provider]) settings.models[settings.provider] = {};
     settings.models[settings.provider].fast = $('#model-fast').value.trim();
     settings.models[settings.provider].smart = $('#model-smart').value.trim();
     settings.opacity = applyOpacity(Number($('#opacity-range').value) / 100);
-    await cue.settingsSet(settings);
+    settings = await cue.settingsSet(settings);
+    if (settings._saveError) showStatus('Could not save settings: ' + settings._saveError);
   }
 
   const shortcutBtn = $('#shortcut-assist');
@@ -701,12 +772,19 @@
   }
   document.addEventListener('mousemove', (e) => {
     const el = document.elementFromPoint(e.clientX, e.clientY);
-    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #transcript-drawer'));
+    const overUI = !!(el && el.closest && el.closest('#toolbar, #panel-wrap, #settings-scrim, #onboard-scrim, #transcript-drawer, #privacy-scrim'));
     setIgnore(!overUI);
   });
   setIgnore(true);
 
   const obScrim = $('#onboard-scrim');
+  const privacyScrim = $('#privacy-scrim');
+
+  function hasAnyKey(s) {
+    const k = (s && s.apiKeys) || {};
+    return !!(k.openai || k.anthropic || k.gemini || k.nvidia);
+  }
+
   const OB_STEPS = [
     {
       mark: 'logo',
@@ -724,13 +802,16 @@
     }] : cue.platform === 'win32' ? [{
       mark: 'settings',
       title: 'Windows permissions',
-      body: 'Cue runs as a desktop app on Windows.<ul><li>Allow <strong>microphone</strong> access when Windows asks (Settings &gt; Privacy &amp; security &gt; Microphone)</li><li>When you start listening, choose a screen/window and keep <strong>Share system audio</strong> on if available</li><li>Screen capture uses Electron desktopCapturer; no extra helper binary</li></ul>'
+      body: 'Cue runs as a desktop app on Windows.<ul><li>Allow <strong>microphone</strong> access when Windows asks (Settings &gt; Privacy &amp; security &gt; Microphone)</li><li>When you start listening, choose a screen/window and keep <strong>Share system audio</strong> on if available</li><li>Screen capture uses Electron desktopCapturer; no extra helper binary</li></ul>',
+      buttons: [
+        { label: 'Open Microphone settings', action: () => cue.openPane('ms-settings:privacy-microphone') }
+      ]
     }] : []),
     {
       mark: 'zap',
       title: 'Connect an AI provider',
       body: 'Cue uses <strong>your</strong> API key. Pick <span class="hl">OpenAI</span>, <span class="hl">Anthropic</span>, <span class="hl">Gemini</span>, or <span class="hl">Nvidia</span>, then paste the key in Settings.<br><br>Listening needs speech-to-text (OpenAI with Whisper, or Gemini). A chat-only key still powers screen and coding help.',
-      buttons: [{ label: 'Open Settings', action: () => { finishOnboard(); openSettings(); } }]
+      buttons: [{ label: 'Open Settings', action: () => { openSettings(); } }]
     },
     {
       mark: 'list',
@@ -740,7 +821,12 @@
     {
       mark: 'sparkles',
       title: 'Ready',
-      body: () => `Quick controls:<ul><li>${shortcutKeycapsHtml(assistShortcut, 'kbd')} Assist</li><li><span class="kbd">${cmdKey}</span> <span class="kbd">H</span> Solve the coding problem on screen</li><li>Top-bar listen button starts meeting capture</li><li>Transcript drawer shows You / Them turns</li><li>Quit with <span class="kbd">${cmdKey}</span> <span class="kbd">Shift</span> <span class="kbd">X</span></li></ul>Reopen this guide from the Cue logo.`
+      body: () => {
+        const keyNote = hasAnyKey(settings)
+          ? 'A provider key is saved on this device.'
+          : '<strong class="hl">No provider key yet.</strong> Open Settings and paste one before Assist will work.';
+        return `${keyNote}<ul><li>${shortcutKeycapsHtml(assistShortcut, 'kbd')} Assist</li><li><span class="kbd">${cmdKey}</span> <span class="kbd">H</span> Solve the coding problem on screen</li><li>Top-bar listen button starts meeting capture (consent required)</li><li>Transcript drawer shows You / Them turns (memory only)</li><li>Quit with <span class="kbd">${cmdKey}</span> <span class="kbd">Shift</span> <span class="kbd">X</span></li></ul>Reopen this guide from the Cue logo.`;
+      }
     }
   ];
 
@@ -767,8 +853,10 @@
       dots.appendChild(d);
     });
     $('#ob-back').style.visibility = obIndex === 0 ? 'hidden' : 'visible';
-    $('#ob-next').textContent = obIndex === OB_STEPS.length - 1 ? 'Done' : 'Next';
-    $('#ob-skip').style.visibility = obIndex === OB_STEPS.length - 1 ? 'hidden' : 'visible';
+    const last = obIndex === OB_STEPS.length - 1;
+    $('#ob-next').textContent = last ? (hasAnyKey(settings) ? 'Done' : 'Add a key first') : 'Next';
+    $('#ob-next').disabled = last && !hasAnyKey(settings);
+    $('#ob-skip').style.visibility = last ? 'hidden' : 'visible';
     animateIn($('#onboard'), { y: 10, scale: 0.98, duration: 0.3 });
   }
 
@@ -780,12 +868,31 @@
   }
 
   async function finishOnboard() {
-    obScrim.classList.add('hidden');
-    if (settings && !settings.onboarded) {
-      settings.onboarded = true;
-      await cue.settingsSet({ onboarded: true });
+    settings = await cue.settingsGet();
+    if (!hasAnyKey(settings)) {
+      showStatus('Add at least one API key before finishing setup.');
+      openSettings();
+      return;
     }
+    settings.onboarded = true;
+    await cue.settingsSet({ onboarded: true });
+    settings = await cue.settingsGet();
+    obScrim.classList.add('hidden');
   }
+
+  function showPrivacy() {
+    privacyScrim.classList.remove('hidden');
+    setIgnore(false);
+    animateIn($('#privacy'), { y: 10, scale: 0.98, duration: 0.3 });
+  }
+
+  $('#privacy-ack').addEventListener('click', async () => {
+    settings.privacyAck = true;
+    await cue.settingsSet({ privacyAck: true });
+    settings = await cue.settingsGet();
+    privacyScrim.classList.add('hidden');
+    if (!settings.onboarded) showOnboard();
+  });
 
   $('#ob-next').addEventListener('click', () => {
     if (obIndex === OB_STEPS.length - 1) finishOnboard();
@@ -794,11 +901,27 @@
   $('#ob-back').addEventListener('click', () => {
     if (obIndex > 0) { obIndex--; renderOnboard(); }
   });
-  $('#ob-skip').addEventListener('click', finishOnboard);
+  $('#ob-skip').addEventListener('click', async () => {
+    // Skip still requires privacy ack already done; mark onboarded only if a key exists.
+    settings = await cue.settingsGet();
+    if (!hasAnyKey(settings)) {
+      showStatus('Skipped guide, but Assist needs an API key in Settings.');
+      settings.onboarded = true;
+      await cue.settingsSet({ onboarded: true });
+      settings = await cue.settingsGet();
+      obScrim.classList.add('hidden');
+      openSettings();
+      return;
+    }
+    finishOnboard();
+  });
   $('#logo-btn').addEventListener('click', showOnboard);
 
   (async function boot() {
     settings = await cue.settingsGet();
+    if (settings._storeNotice) showStatus(settings._storeNotice);
+    if (settings._encryptionWarning) showStatus(settings._encryptionWarning);
+    if (settings._saveError) showStatus('Could not save settings: ' + settings._saveError);
     assistShortcut = (settings.shortcuts && settings.shortcuts.assist) || DEFAULT_ASSIST_SHORTCUT;
     syncAssistShortcutLabels();
     smartBtn.classList.toggle('on', !!settings.smart);
@@ -812,6 +935,7 @@
     pulseLive(!!st.active);
     animateIn($('#toolbar'), { y: -8, duration: 0.4 });
     animateIn($('#panel'), { y: 10, duration: 0.42 });
-    if (!settings.onboarded) showOnboard();
+    if (!settings.privacyAck) showPrivacy();
+    else if (!settings.onboarded) showOnboard();
   })();
 })();

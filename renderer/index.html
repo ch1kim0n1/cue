@@ -2,12 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; script-src 'self'; img-src 'self' data:;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Cue</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="fonts.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -62,9 +60,9 @@
     </div>
   </div>
 
-  <div id="transcript-drawer" class="hidden" aria-live="polite">
+  <div id="transcript-drawer" class="hidden" role="dialog" aria-modal="false" aria-labelledby="td-title" aria-live="polite">
     <div class="td-head">
-      <div class="td-title">Live transcript</div>
+      <div class="td-title" id="td-title">Live transcript</div>
       <div class="td-actions">
         <button type="button" id="export-transcript" class="ra-btn">Export</button>
         <button type="button" id="clear-transcript" class="ra-btn">Clear</button>
@@ -72,19 +70,22 @@
       </div>
     </div>
     <div id="transcript-list"></div>
-    <div id="transcript-empty" class="td-empty">Start listening to capture You / Them turns here.</div>
+    <div id="transcript-empty" class="td-empty">Start listening to capture You / Them turns here. Transcripts stay in memory only and clear when Cue quits.</div>
   </div>
 
-  <div id="settings-scrim" class="hidden">
+  <div id="settings-scrim" class="hidden" role="dialog" aria-modal="true" aria-labelledby="s-title">
     <div id="settings" class="glass">
       <div class="s-head">
         <div>
-          <div class="s-title">Settings</div>
+          <div class="s-title" id="s-title">Settings</div>
           <div class="s-sub">Keys stay on this machine. Cue has no account and no server.</div>
         </div>
         <button id="s-close" class="s-close" type="button">Done</button>
       </div>
       <div class="s-body">
+        <label class="s-check"><input id="listen-consent" type="checkbox" /> I have consent to capture meeting audio where required by law</label>
+        <div class="s-hint-block">Listening sends mic and meeting audio to your chosen AI provider. Session transcripts are memory-only and vanish when Cue quits.</div>
+
         <label class="s-label">Provider</label>
         <div class="s-seg" id="provider-seg">
           <button type="button" data-provider="openai">OpenAI</button>
@@ -121,7 +122,33 @@
         </div>
         <div class="shortcut-hint" id="shortcut-hint">Click the shortcut, then press a new key combination.</div>
 
+        <label class="s-label">Data on this device</label>
+        <div class="s-path" id="data-path">Loading path...</div>
+        <div class="s-hint-block">Listening needs speech-to-text: an OpenAI key with Whisper access, or a Gemini key. Chat-only keys still power screen and coding help.</div>
+        <div class="s-danger-row">
+          <button type="button" id="clear-keys" class="ra-btn">Clear all keys</button>
+          <button type="button" id="wipe-data" class="ra-btn">Delete my data</button>
+        </div>
+
+        <label class="s-label">Diagnostics</label>
+        <pre class="s-diag" id="diagnostics-box">Open Settings to refresh.</pre>
+
         <div class="s-status" id="s-status"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="privacy-scrim" class="hidden" role="dialog" aria-modal="true" aria-labelledby="privacy-title">
+    <div id="privacy" class="glass">
+      <div class="ob-title" id="privacy-title">Before you use Cue</div>
+      <div class="ob-body">
+        <p>Cue is a local overlay. It has no account and no Cue server. Screenshots and audio leave your machine only when you trigger a feature, and only to the AI provider whose key you pasted.</p>
+        <p>Cue tries to stay out of screen shares. That is best-effort, not guaranteed. Do not use Cue in proctored exams, interviews, or recorded meetings if that breaks the rules or local consent laws. You are responsible for how you use it, including consent when capturing other people.</p>
+        <p>Cue is for adults using their own notes, studying, accessibility, and practice.</p>
+      </div>
+      <div class="ob-actions">
+        <div class="spacer"></div>
+        <button type="button" id="privacy-ack" class="ob-primary">I understand</button>
       </div>
     </div>
   </div>

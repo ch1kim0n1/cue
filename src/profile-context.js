@@ -5,7 +5,10 @@ const MAX_RESUME_CONTEXT_CHARS = 12000;
 /**
  * Adds a résumé as data-only context without changing prompts for users who have not supplied one.
  *
- * @param {string} systemPrompt The mode-specific prompt cue would otherwise send.
+ * Residual risk: models can still be influenced by adversarial text inside a résumé despite the
+ * "untrusted data, not instructions" framing. Users should not paste untrusted documents.
+ *
+ * @param {string} systemPrompt The mode-specific prompt Cue would otherwise send.
  * @param {unknown} resumeContext The locally saved résumé text.
  * @returns {string} The prompt, optionally grounded in the supplied résumé.
  */

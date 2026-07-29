@@ -1,36 +1,48 @@
 /* electron-builder configuration.
  *
- * Signing is environment-gated (same idea as NitroAI):
- *   MAC_SIGN=1 + Developer ID / CSC_LINK + Apple notarization env => signed mac zip
- *   otherwise mac builds are unsigned (identity: null)
- * Windows builds produce an NSIS installer for x64.
+ * macOS signing: MAC_SIGN=1 + Developer ID / CSC_LINK + Apple notarization env
+ * Windows signing: WIN_CSC_LINK (or CSC_LINK) + WIN_CSC_KEY_PASSWORD
+ * Auto-updates publish to GitHub Releases (owner/repo inferred from package/git).
  */
 
-const hasCert = process.env.MAC_SIGN === "1";
+const hasMacCert = process.env.MAC_SIGN === "1";
 const canNotarize =
-  hasCert &&
+  hasMacCert &&
   !!process.env.APPLE_ID &&
   !!process.env.APPLE_APP_SPECIFIC_PASSWORD &&
   !!process.env.APPLE_TEAM_ID;
+
+const winCert = process.env.WIN_CSC_LINK || process.env.CSC_LINK || "";
+const hasWinCert = !!winCert;
 
 /** @type {import('electron-builder').Configuration} */
 module.exports = {
   appId: "com.cue.overlay",
   productName: "Cue",
-  asar: false,
-  publish: null,
+  asar: true,
+  publish: [
+    {
+      provider: "github",
+      owner: "ch1kim0n1",
+      repo: "cue",
+      releaseType: "release",
+    },
+  ],
   files: [
     "main.js",
     "preload.js",
     "src/**/*",
     "renderer/**/*",
+    "THIRD_PARTY_NOTICES.md",
   ],
   directories: { buildResources: "build-resources" },
   mac: {
-    target: [{ target: "zip", arch: ["arm64"] }],
+    target: [
+      { target: "zip", arch: ["arm64", "x64"] },
+    ],
     category: "public.app-category.productivity",
-    identity: hasCert ? undefined : null,
-    hardenedRuntime: hasCert,
+    identity: hasMacCert ? undefined : null,
+    hardenedRuntime: hasMacCert,
     gatekeeperAssess: false,
     entitlements: "build-resources/entitlements.mac.plist",
     entitlementsInherit: "build-resources/entitlements.mac.plist",
@@ -50,6 +62,9 @@ module.exports = {
       { target: "portable", arch: ["x64"] },
     ],
     artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
+    // electron-builder picks CSC_LINK; prefer WIN_CSC_LINK when set in CI.
+    certificateFile: hasWinCert ? undefined : undefined,
+    signingHashAlgorithms: hasWinCert ? ["sha256"] : undefined,
   },
   nsis: {
     oneClick: false,

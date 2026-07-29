@@ -1,11 +1,17 @@
 // Pure settings helpers (no Electron) so unit tests can run in plain Node.
 
+const SCHEMA_VERSION = 2;
+
 const DEFAULTS = {
+  schemaVersion: SCHEMA_VERSION,
   provider: 'openai',
   smart: false,
   resumeContext: '',
   opacity: 0.92,
   compact: false,
+  onboarded: false,
+  privacyAck: false,
+  listenConsent: false,
   shortcuts: { assist: 'CommandOrControl+Return' },
   apiKeys: { openai: '', anthropic: '', gemini: '', deepgram: '', nvidia: '' },
   models: {
@@ -34,10 +40,24 @@ function clampOpacity(value) {
   return Math.min(1, Math.max(0.55, n));
 }
 
-function normalizeSettings(raw) {
+function migrateSettings(raw) {
   const data = deepMerge(DEFAULTS, raw || {});
+  const from = Number(raw && raw.schemaVersion) || 1;
+  // v1 -> v2: introduce privacy/consent flags (default false so first-run shows notices)
+  if (from < 2) {
+    if (raw && raw.onboarded && raw.privacyAck == null) data.privacyAck = true;
+  }
+  data.schemaVersion = SCHEMA_VERSION;
+  return data;
+}
+
+function normalizeSettings(raw) {
+  const data = migrateSettings(raw);
   data.opacity = clampOpacity(data.opacity);
   data.compact = !!data.compact;
+  data.onboarded = !!data.onboarded;
+  data.privacyAck = !!data.privacyAck;
+  data.listenConsent = !!data.listenConsent;
   if (!data.apiKeys[data.provider]) {
     const validProviders = ['openai', 'anthropic', 'gemini', 'nvidia'];
     const active = validProviders.find((p) => data.apiKeys[p]);
@@ -46,4 +66,17 @@ function normalizeSettings(raw) {
   return data;
 }
 
-module.exports = { DEFAULTS, deepMerge, clampOpacity, normalizeSettings };
+function hasProviderKey(settings) {
+  const keys = (settings && settings.apiKeys) || {};
+  return !!(keys.openai || keys.anthropic || keys.gemini || keys.nvidia);
+}
+
+module.exports = {
+  SCHEMA_VERSION,
+  DEFAULTS,
+  deepMerge,
+  clampOpacity,
+  migrateSettings,
+  normalizeSettings,
+  hasProviderKey
+};
