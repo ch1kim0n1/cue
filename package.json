@@ -13,7 +13,7 @@
     "test": "node --test test/**/*.test.js test/smoke-main.js",
     "test:smoke": "node test/smoke-main.js",
     "test:e2e": "playwright test",
-    "lint": "eslint main.js preload.js src renderer scripts test e2e --max-warnings 50",
+    "lint": "eslint main.js preload.js src renderer scripts test e2e --max-warnings 45",
     "pack": "electron-builder --dir",
     "test:e2e:packed": "node scripts/e2e-packed.js",
     "dist": "electron-builder --mac zip",

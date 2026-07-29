@@ -489,7 +489,7 @@ async function runFeature(mode, userText) {
     send('llm:done', {});
   } catch (e) {
     if (e && (e.name === 'AbortError' || e.code === 'ABORT_ERR' || /cancelled|aborted/i.test(String(e.message || '')))) {
-      send('llm:error', { message: 'Cancelled.', kind: 'cancel' });
+      send('llm:error', { message: 'Request cancelled.', kind: 'cancel' });
       return;
     }
     const settings = store.getSettings();
@@ -593,6 +593,8 @@ function diagnostics() {
     cpu,
     sessionSpend,
     lifetimeSpend: Number(settings.lifetimeSpend) || 0,
+    betaUpdates: !!settings.betaUpdates,
+    allowPrerelease: !!(autoUpdaterRef && autoUpdaterRef.allowPrerelease),
     privacyNoticeVersion: PRIVACY_NOTICE_VERSION
   };
 }
@@ -952,6 +954,20 @@ if (gotLock) {
     createWindow();
     registerShortcuts();
     setupAutoUpdater();
+
+    try {
+      const loginSettings = app.getLoginItemSettings();
+      if (loginSettings && loginSettings.wasOpenedAtLogin) {
+        setTimeout(() => {
+          send('status', {
+            message: 'Cue is running in the background. Press ' +
+              (isMac() ? '⌘' : 'Ctrl') + '+Enter for Assist.'
+          });
+        }, 2000);
+      }
+    } catch (e) {
+      log.debug('login item status unavailable', e && e.message);
+    }
 
     const protectWarn = contentProtectionWarning(process.platform, os.release());
     if (protectWarn) {

@@ -80,7 +80,12 @@ test('wave4 surfaces cancel and security hardening', () => {
   assert.match(main, /X-Content-Type-Options/);
   assert.match(main, /csp:report/);
   assert.match(main, /MAX_LONG_EDGE|cappedThumbnailSize|estimateCallCost/);
+  assert.match(main, /allowPrerelease/);
+  assert.match(main, /wasOpenedAtLogin/);
+  assert.match(main, /getCPUUsage/);
   const preload = fs.readFileSync(path.join(root, 'preload.js'), 'utf8');
   assert.match(preload, /featureCancel/);
   assert.match(preload, /reportCsp/);
+  const html = fs.readFileSync(path.join(root, 'renderer', 'index.html'), 'utf8');
+  assert.match(html, /recent-btn/);
 });

@@ -17,14 +17,23 @@ if (pack.status !== 0) process.exit(pack.status || 1);
 
 let exe = null;
 if (isWin) {
-  const candidates = [
-    path.join(root, 'dist', 'win-unpacked', 'Cue.exe'),
-    path.join(root, 'dist', 'win-unpacked', 'cue.exe')
-  ];
-  exe = candidates.find((p) => fs.existsSync(p));
+  const winExe = path.join(root, 'dist', 'win-unpacked', 'Cue.exe');
+  const winExeAlt = path.join(root, 'dist', 'win-unpacked', 'cue.exe');
+  // Pack layout is fixed under dist/; paths are not user-controlled.
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  if (fs.existsSync(winExe)) exe = winExe;
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  else if (fs.existsSync(winExeAlt)) exe = winExeAlt;
 } else if (isMac) {
-  const dirs = ['mac', 'mac-arm64', 'mac-x64'].map((d) => path.join(root, 'dist', d, 'Cue.app', 'Contents', 'MacOS', 'Cue'));
-  exe = dirs.find((p) => fs.existsSync(p));
+  const macCandidates = [
+    path.join(root, 'dist', 'mac', 'Cue.app', 'Contents', 'MacOS', 'Cue'),
+    path.join(root, 'dist', 'mac-arm64', 'Cue.app', 'Contents', 'MacOS', 'Cue'),
+    path.join(root, 'dist', 'mac-x64', 'Cue.app', 'Contents', 'MacOS', 'Cue')
+  ];
+  for (const candidate of macCandidates) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename
+    if (fs.existsSync(candidate)) { exe = candidate; break; }
+  }
 }
 
 if (!exe) {

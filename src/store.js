@@ -8,7 +8,8 @@ const { createLogger } = require('./logger');
 
 const log = createLogger({ prefix: 'store' });
 
-let FILE = path.join(app.getPath('userData'), 'cue-data.json');
+const DATA_DIR = path.resolve(app.getPath('userData'));
+let FILE = path.join(DATA_DIR, 'cue-data.json');
 let data = null;
 let lastSaveError = null;
 let encryptionWarning = null;
@@ -26,8 +27,9 @@ function setFileForTests(nextPath) {
 function assertStorePath(targetPath) {
   const resolved = path.resolve(targetPath);
   const root = path.resolve(path.dirname(FILE));
-  const ok = resolved === root || resolved.startsWith(root + path.sep);
-  if (!ok) throw new Error('Refusing path outside Cue data directory: ' + resolved);
+  if (!(resolved === root || resolved.startsWith(root + path.sep))) {
+    throw new Error('path sanity check failed');
+  }
   return resolved;
 }
 

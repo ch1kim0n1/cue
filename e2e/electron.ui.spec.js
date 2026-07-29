@@ -76,5 +76,20 @@ test.describe('Cue Electron UI', () => {
     expect(diag.platform).toBeTruthy();
     expect(typeof diag.hasKey).toBe('boolean');
     expect(diag.dataPath).toBeTruthy();
+    expect(diag).toHaveProperty('cpu');
+    expect(diag).toHaveProperty('sessionSpend');
+    expect(diag).toHaveProperty('lifetimeSpend');
+  });
+
+  test('recent menu is present in the composer', async () => {
+    const settings = page.locator('#settings-scrim');
+    if (await settings.isVisible()) await page.locator('#s-close').click();
+    const onboard = page.locator('#onboard-scrim');
+    if (await onboard.isVisible()) await page.locator('#ob-skip').click();
+    if (await settings.isVisible()) await page.locator('#s-close').click();
+    await expect(page.locator('#recent-btn')).toBeVisible();
+    await page.locator('#recent-btn').click({ force: true });
+    await expect(page.locator('#recent-menu')).toBeVisible();
+    await expect(page.locator('#recent-menu')).toContainText(/No recent requests|assist|ask|say|followup|recap|leetcode/i);
   });
 });

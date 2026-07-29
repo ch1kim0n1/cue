@@ -7,16 +7,20 @@
 - Approximate per-call cost + session/lifetime spend tracker
 - HiDPI screenshot long-edge cap (2560px)
 - rAF-batched token rendering, tok/s indicator, copy-on-code-blocks
-- Mic device picker, start-on-login, beta updates toggle
+- Mic device picker, start-on-login, beta updates toggle (`allowPrerelease`)
+- Recent requests menu (re-run last modes/text)
 - Offline race fix (local `isOnline` + awaited `netSetOnline`)
 - NSIS uninstall prompt for cue-data.json / cue.log
 - CSP violation logging + nosniff / frame / referrer headers
+- Markdown link clicks routed through `openPane` allowlist
+- Boot toast when launched via login item
 - Packaged-asar e2e helper (`npm run test:e2e:packed`)
 - Support Cue link, landing doc, refund policy, verification runbook
 
 ### Fixed
-- Lint budget restored to max-warnings 50 (store path allowlist + timingSafeEqual)
+- Lint budget restored (max-warnings 45; icons/PCM/pricing Map access)
 - Minimum panel opacity raised to 70% for contrast
+- Cancel status copy: "Request cancelled."
 
 ### Known issues
 - Full NVDA/VoiceOver and DPAPI dual-user checks remain manual (see docs/wave4-verification.md)

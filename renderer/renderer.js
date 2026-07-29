@@ -40,6 +40,13 @@
   const cancelBtn = $('#cancel-btn');
   const costLabel = $('#cost-label');
   const rateLabel = $('#rate-label');
+
+  messages.addEventListener('click', (e) => {
+    const a = e.target && e.target.closest && e.target.closest('a');
+    if (!a || !a.href) return;
+    e.preventDefault();
+    cue.openPane(a.href);
+  });
   function canAnimate() { return !!(gsap && !reduceMotion); }
 
   function animateIn(el, vars) {
@@ -90,7 +97,9 @@
       Return: 'Enter', Escape: 'Esc', Space: 'Space',
       Up: '↑', Down: '↓', Left: '←', Right: '→'
     };
-    return (accelerator || DEFAULT_ASSIST_SHORTCUT).split('+').map((part) => labels[part] || part);
+    return (accelerator || DEFAULT_ASSIST_SHORTCUT).split('+').map((part) =>
+      (Object.prototype.hasOwnProperty.call(labels, part) ? labels[part] : part)
+    );
   }
 
   function shortcutKeycapsHtml(accelerator, className) {
@@ -388,7 +397,11 @@
       await audioCtx.audioWorklet.addModule('./pcm-processor.js');
       micNode = audioCtx.createMediaStreamSource(micStream);
       micProc = new AudioWorkletNode(audioCtx, 'pcm-processor');
-      micProc.port.onmessage = (e) => cue.micPcm(e.data);
+      micProc.port.onmessage = (e) => {
+        const payload = e.data;
+        const buf = payload && payload.data != null ? payload.data : payload;
+        cue.micPcm(buf);
+      };
       const sink = audioCtx.createGain();
       sink.gain.value = 0;
       micNode.connect(micProc);
@@ -432,7 +445,11 @@
       await sysCtx.audioWorklet.addModule('./pcm-processor.js');
       sysNode = sysCtx.createMediaStreamSource(new MediaStream(tracks));
       sysProc = new AudioWorkletNode(sysCtx, 'pcm-processor');
-      sysProc.port.onmessage = (e) => cue.systemPcm(e.data);
+      sysProc.port.onmessage = (e) => {
+        const payload = e.data;
+        const buf = payload && payload.data != null ? payload.data : payload;
+        cue.systemPcm(buf);
+      };
       const sink = sysCtx.createGain();
       sink.gain.value = 0;
       sysNode.connect(sysProc);
@@ -475,7 +492,14 @@
     setBusy(true);
   });
   cue.on('llm:token', ({ text }) => appendToken(text));
-  cue.on('llm:done', () => { finalizeAi(); setBusy(false); });
+  cue.on('llm:done', async () => {
+    finalizeAi();
+    setBusy(false);
+    try {
+      settings = await cue.settingsGet();
+      fillRecent();
+    } catch { /* ignore */ }
+  });
   cue.on('llm:cost', (info) => {
     if (costLabel && info && info.label) {
       costLabel.textContent = info.label;
@@ -653,7 +677,62 @@
     $('#s-status').textContent = statusText();
     refreshPathsAndDiagnostics();
     populateAudioDevices();
+    fillRecent();
   }
+
+  function fillRecent() {
+    const menu = $('#recent-menu');
+    if (!menu) return;
+    const recent = (settings.recentFeatures || []).slice(0, 10);
+    if (!recent.length) {
+      menu.innerHTML = '<div class="recent-empty">No recent requests yet.</div>';
+      return;
+    }
+    menu.innerHTML = recent.map((r, i) =>
+      '<button type="button" class="recent-item" role="option" data-idx="' + i + '">' +
+        esc(r.mode) + ': ' + esc((r.userText || '').slice(0, 60) || '(no text)') +
+      '</button>'
+    ).join('');
+  }
+
+  function closeRecentMenu() {
+    const menu = $('#recent-menu');
+    const btn = $('#recent-btn');
+    if (menu) menu.classList.add('hidden');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  }
+
+  const recentBtn = $('#recent-btn');
+  if (recentBtn) {
+    recentBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      fillRecent();
+      const menu = $('#recent-menu');
+      if (!menu) return;
+      const open = menu.classList.contains('hidden');
+      menu.classList.toggle('hidden', !open);
+      recentBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+  }
+  const recentMenu = $('#recent-menu');
+  if (recentMenu) {
+    recentMenu.addEventListener('click', (e) => {
+      const item = e.target && e.target.closest && e.target.closest('.recent-item');
+      if (!item) return;
+      const idx = Number(item.getAttribute('data-idx'));
+      const list = Array.isArray(settings.recentFeatures) ? settings.recentFeatures : [];
+      const recent = (Number.isInteger(idx) && idx >= 0 && idx < list.length) ? list[idx] : null;
+      closeRecentMenu();
+      if (!recent || !recent.mode) return;
+      runMode(recent.mode, recent.userText || '');
+    });
+  }
+  document.addEventListener('click', (e) => {
+    const menu = $('#recent-menu');
+    if (!menu || menu.classList.contains('hidden')) return;
+    if (e.target && e.target.closest && e.target.closest('#recent-btn, #recent-menu')) return;
+    closeRecentMenu();
+  });
 
   async function populateAudioDevices() {
     const sel = $('#audio-device');

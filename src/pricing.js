@@ -5,17 +5,17 @@
 
 /** @typedef {{ inPerMTok: number, outPerMTok: number }} ModelPrice */
 
-/** @type {Record<string, ModelPrice>} */
-const MODEL_PRICES = {
-  'gpt-4o-mini': { inPerMTok: 0.15, outPerMTok: 0.6 },
-  'gpt-4o': { inPerMTok: 2.5, outPerMTok: 10 },
-  'claude-3-5-haiku-latest': { inPerMTok: 0.8, outPerMTok: 4 },
-  'claude-3-5-sonnet-latest': { inPerMTok: 3, outPerMTok: 15 },
-  'gemini-2.5-flash': { inPerMTok: 0.15, outPerMTok: 0.6 },
-  'gemini-2.5-pro': { inPerMTok: 1.25, outPerMTok: 10 },
-  'meta/llama-3.2-11b-vision-instruct': { inPerMTok: 0.2, outPerMTok: 0.2 },
-  'meta/llama-3.2-90b-vision-instruct': { inPerMTok: 0.9, outPerMTok: 0.9 }
-};
+/** @type {Map<string, ModelPrice>} */
+const MODEL_PRICES = new Map([
+  ['gpt-4o-mini', { inPerMTok: 0.15, outPerMTok: 0.6 }],
+  ['gpt-4o', { inPerMTok: 2.5, outPerMTok: 10 }],
+  ['claude-3-5-haiku-latest', { inPerMTok: 0.8, outPerMTok: 4 }],
+  ['claude-3-5-sonnet-latest', { inPerMTok: 3, outPerMTok: 15 }],
+  ['gemini-2.5-flash', { inPerMTok: 0.15, outPerMTok: 0.6 }],
+  ['gemini-2.5-pro', { inPerMTok: 1.25, outPerMTok: 10 }],
+  ['meta/llama-3.2-11b-vision-instruct', { inPerMTok: 0.2, outPerMTok: 0.2 }],
+  ['meta/llama-3.2-90b-vision-instruct', { inPerMTok: 0.9, outPerMTok: 0.9 }]
+]);
 
 const DEFAULT_PRICE = { inPerMTok: 1, outPerMTok: 3 };
 const CHARS_PER_TOKEN = 4;
@@ -34,9 +34,13 @@ function estimateTokens(text) {
  * @returns {ModelPrice}
  */
 function priceForModel(model) {
-  if (MODEL_PRICES[model]) return MODEL_PRICES[model];
-  const key = Object.keys(MODEL_PRICES).find((k) => model && String(model).includes(k.split('/').pop()));
-  return key ? MODEL_PRICES[key] : DEFAULT_PRICE;
+  const name = String(model || '');
+  if (MODEL_PRICES.has(name)) return MODEL_PRICES.get(name);
+  for (const [key, price] of MODEL_PRICES.entries()) {
+    const short = key.includes('/') ? key.slice(key.lastIndexOf('/') + 1) : key;
+    if (name.includes(short)) return price;
+  }
+  return DEFAULT_PRICE;
 }
 
 /**

@@ -12,7 +12,7 @@ Supported Node: 18+ (CI covers 18/20/22). Electron is pinned to 33.2.1.
 ## Pre-push checklist (same as CI)
 
 ```bash
-npm run lint
+npm run lint          # max-warnings 45
 npm test
 npm run test:smoke
 npm run verify:vendor
